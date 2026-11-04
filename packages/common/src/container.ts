@@ -1,4 +1,5 @@
 import type { CommonConfig } from './config.ts';
+import { createContextLogger } from './context.ts';
 import { createDynamoClient, type DynamoClient } from './db/dynamo.ts';
 import { todosModule } from './features/todos/index.ts';
 import type { Logger } from './logger.ts';
@@ -20,39 +21,35 @@ export function extend<D extends object, P extends object>(deps: D, module: (dep
   return { ...deps, ...module(deps) };
 }
 
-/** All services for one logger scope. Add new feature modules here. */
-function buildScope<C extends CommonConfig>(core: Core<C>) {
+/** All feature modules. Add new ones here. */
+function buildServices<C extends CommonConfig>(core: Core<C>) {
   return extend(core, todosModule);
 }
 
-export type Scope<C extends CommonConfig = CommonConfig> = ReturnType<typeof buildScope<C>>;
-
-export type Container<C extends CommonConfig = CommonConfig> = Scope<C> & {
-  /**
-   * Same services bound to another logger (e.g. Fastify's `request.log`),
-   * reusing the process-wide singletons such as the DynamoDB client.
-   */
-  withLogger(logger: Logger): Scope<C>;
+export type Container<C extends CommonConfig = CommonConfig> = ReturnType<typeof buildServices<C>> & {
   dispose(): void;
 };
 
 export interface ContainerOptions<C extends CommonConfig> {
   config: C;
+  /** Root logger, used outside a request context (see `runWithContext`). */
   logger: Logger;
   /** Replace singletons, e.g. a DynamoDB client pointing at a test table. */
   dynamo?: DynamoClient;
 }
 
+/**
+ * Builds every service once for the process. Services log through a context
+ * logger, so calls made inside `runWithContext({ logger })` log with that
+ * logger (e.g. carrying the request ID) without rebuilding anything.
+ */
 export function createContainer<C extends CommonConfig>({
   config,
   logger,
   dynamo = createDynamoClient(config),
 }: ContainerOptions<C>): Container<C> {
-  const scope = (scopeLogger: Logger) => buildScope({ config, logger: scopeLogger, dynamo });
-
   return {
-    ...scope(logger),
-    withLogger: scope,
+    ...buildServices({ config, logger: createContextLogger(logger), dynamo }),
     dispose: () => dynamo.destroy(),
   };
 }

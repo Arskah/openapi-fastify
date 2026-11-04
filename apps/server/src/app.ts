@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import fastifySwagger from '@fastify/swagger';
 import fastifySwaggerUi from '@fastify/swagger-ui';
-import type { Container, Scope } from '@demo/common';
+import { runWithContext, type Container } from '@demo/common';
 import Fastify, { type FastifyBaseLogger, LogController } from 'fastify';
 import {
   jsonSchemaTransform,
@@ -13,13 +13,6 @@ import type { ServerConfig } from './config.ts';
 import { errorHandler } from './errors.ts';
 import { transformObject } from './openapi.ts';
 import { todoRoutes } from './routes/todos.ts';
-
-declare module 'fastify' {
-  interface FastifyRequest {
-    /** Common services bound to this request's logger (carries `requestId`). */
-    services: Scope<ServerConfig>;
-  }
-}
 
 const REQUEST_ID_HEADER = 'x-request-id';
 const VALID_REQUEST_ID = /^[\w.:-]{1,128}$/;
@@ -47,10 +40,10 @@ export async function buildApp({ logger, container }: AppOptions) {
   app.setSerializerCompiler(serializerCompiler);
   app.setErrorHandler(errorHandler);
 
-  app.decorateRequest('services', null as unknown as Scope<ServerConfig>);
-  app.addHook('onRequest', async (request, reply) => {
-    request.services = container.withLogger(request.log);
+  // Continue the request inside a context so common code logs via request.log (carries requestId)
+  app.addHook('onRequest', (request, reply, done) => {
     reply.header(REQUEST_ID_HEADER, request.id);
+    runWithContext({ logger: request.log }, done);
   });
 
   await app.register(fastifySwagger, {
@@ -65,7 +58,7 @@ export async function buildApp({ logger, container }: AppOptions) {
   await app.register(fastifySwaggerUi, { routePrefix: '/docs' });
 
   app.get('/health', { schema: { hide: true } }, () => ({ status: 'ok' }));
-  await app.register(todoRoutes);
+  await app.register(todoRoutes, { container });
 
   return app;
 }

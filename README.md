@@ -37,21 +37,25 @@ pnpm generate   # writes apps/server/openapi.json, then regenerates apps/cli/src
 ```
 
 **Container.** `createContainer({ config, logger })` in `packages/common/src/container.ts` builds
-the process-wide singletons (DynamoDB client) once and composes feature modules with `extend()`.
-Each module is a function `(deps) => provides`. Its parameter type is checked against what
-earlier modules provide, so wiring things in the wrong order fails at compile time. To add a feature:
+everything once per process (DynamoDB client, repositories, services) and composes feature
+modules with `extend()`. Each module is a function `(deps) => provides`. Its parameter type is
+checked against what earlier modules provide, so wiring things in the wrong order fails at
+compile time. To add a feature:
 
 ```ts
-function buildScope<C extends CommonConfig>(core: Core<C>) {
+function buildServices<C extends CommonConfig>(core: Core<C>) {
   return extend(extend(core, todosModule), notesModule);
 }
 ```
 
 **Request-scoped logging.** The server derives a request ID from the `x-request-id` header,
-or generates a UUID, and echoes it back. On every request it calls
-`container.withLogger(request.log)`, which reuses the same singletons but binds services to the
-request's pino child logger. Every log line from common code therefore carries `requestId`. The CLI
-sends a fresh UUID (or `--request-id`) and prints it on errors, so you can grep the server logs for it.
+or generates a UUID, and echoes it back. Its `onRequest` hook continues the request inside
+`runWithContext({ logger: request.log }, …)` (AsyncLocalStorage, `packages/common/src/context.ts`).
+Services hold a context logger that writes through the current context's logger. Every log line
+from common code therefore carries `requestId`, even though the services are singletons. Outside a
+context (startup, scripts), it falls back to the root logger. Other entry points, such as a queue
+worker, can call `runWithContext` the same way. The CLI sends a fresh UUID (or `--request-id`) and
+prints it on errors, so you can grep the server logs for it.
 
 **Config.** `CommonConfigSchema` covers what common needs (AWS, tables). The server extends it
 with its own sections (`ServerConfigSchema`) and passes the whole object into the container,
