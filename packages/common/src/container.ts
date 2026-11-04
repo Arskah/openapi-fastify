@@ -1,7 +1,6 @@
 import type { CommonConfig } from './config.ts';
 import { createContextLogger } from './context.ts';
-import { createDynamoClient, type DynamoClient } from './db/dynamo.ts';
-import { createTransactionRunner, type RunTransaction } from './db/transaction.ts';
+import { createDynamoClient, type DynamoClient, repositoriesModule } from './data/index.ts';
 import { projectsModule } from './features/projects/index.ts';
 import { todosModule } from './features/todos/index.ts';
 import type { Logger } from './logger.ts';
@@ -11,8 +10,6 @@ export interface Core<C extends CommonConfig = CommonConfig> {
   config: C;
   logger: Logger;
   dynamo: DynamoClient;
-  /** Atomic writes across repositories, including other features'. */
-  transact: RunTransaction;
 }
 
 /**
@@ -25,9 +22,13 @@ export function extend<D extends object, P extends object>(deps: D, module: (dep
   return { ...deps, ...module(deps) };
 }
 
-/** All feature modules. Add new ones here. */
+/**
+ * Layers are composed bottom-up: core → repositories → features. Features
+ * depend on repositories (and domain), never on each other.
+ */
 function buildServices<C extends CommonConfig>(core: Core<C>) {
-  return extend(extend(core, todosModule), projectsModule);
+  const data = extend(core, repositoriesModule);
+  return extend(extend(data, todosModule), projectsModule);
 }
 
 export type Container<C extends CommonConfig = CommonConfig> = ReturnType<typeof buildServices<C>> & {
@@ -52,14 +53,8 @@ export function createContainer<C extends CommonConfig>({
   logger,
   dynamo = createDynamoClient(config),
 }: ContainerOptions<C>): Container<C> {
-  const contextLogger = createContextLogger(logger);
   return {
-    ...buildServices({
-      config,
-      logger: contextLogger,
-      dynamo,
-      transact: createTransactionRunner({ dynamo, logger: contextLogger }),
-    }),
+    ...buildServices({ config, logger: createContextLogger(logger), dynamo }),
     dispose: () => dynamo.destroy(),
   };
 }

@@ -7,3 +7,9 @@ savePrefix: ''
 
 # Refuse versions published less than 3 days ago (minutes)
 minimumReleaseAge: 4320
+
+packageExtensions:
+  # dependency-cruiser loads `typescript` dynamically to parse .ts and supports <7 only
+  dependency-cruiser:
+    dependencies:
+      typescript: 6.0.3

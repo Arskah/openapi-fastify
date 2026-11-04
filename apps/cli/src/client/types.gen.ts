@@ -27,6 +27,7 @@ export type ProjectIdInput = string;
 
 export type CreateProjectInput = {
     name: string;
+    todos?: Array<CreateTodoInput>;
 };
 
 /**
@@ -41,11 +42,6 @@ export type Todo = {
     done: boolean;
     createdAt: string;
     updatedAt: string;
-};
-
-export type TodoList = {
-    items: Array<Todo>;
-    nextCursor?: string;
 };
 
 /**
@@ -72,6 +68,11 @@ export type ProjectDetails = {
 export type ProjectTodo = {
     project: Project;
     todo: Todo;
+};
+
+export type TodoList = {
+    items: Array<Todo>;
+    nextCursor?: string;
 };
 
 export type ApiError = {
@@ -239,7 +240,7 @@ export type CreateProjectResponses = {
     /**
      * Default Response
      */
-    201: Project;
+    201: ProjectDetails;
 };
 
 export type CreateProjectResponse = CreateProjectResponses[keyof CreateProjectResponses];

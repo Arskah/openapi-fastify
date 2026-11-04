@@ -13,10 +13,13 @@
     "db:init": "pnpm --filter @demo/common db:init",
     "generate": "pnpm --filter @demo/server openapi && pnpm --filter @demo/cli generate",
     "cli": "pnpm --filter @demo/cli --silent start",
-    "typecheck": "tsc -p packages/common && tsc -p apps/server && tsc -p apps/cli"
+    "typecheck": "tsc -p packages/common && tsc -p apps/server && tsc -p apps/cli",
+    "lint:deps": "depcruise packages/common/src --config .dependency-cruiser.cjs",
+    "check": "pnpm typecheck && pnpm lint:deps"
   },
   "devDependencies": {
     "@types/node": "26.6.6",
+    "dependency-cruiser": "18.7.0",
     "typescript": "7.0.2"
   }
 }

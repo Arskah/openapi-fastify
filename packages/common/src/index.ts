@@ -1,11 +1,9 @@
 export * from './config.ts';
 export * from './container.ts';
 export * from './context.ts';
+export * from './data/index.ts';
+export * from './domain/index.ts';
 export * from './errors.ts';
 export * from './features/projects/index.ts';
 export * from './features/todos/index.ts';
-export * from './tables.ts';
-export type { DynamoClient } from './db/dynamo.ts';
-export type { TableDefinition } from './db/table.ts';
-export type { RunTransaction, Transaction, WriteContext, WriteOp, WriteOptions } from './db/transaction.ts';
 export type { Logger, LogFn } from './logger.ts';

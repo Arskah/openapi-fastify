@@ -1,24 +1,15 @@
 import { z } from 'zod';
-import { TodoIdSchema, TodoSchema } from '../todos/todo.schema.ts';
-
-export const ProjectIdSchema = z.uuid().meta({ id: 'ProjectId', description: 'Project identifier' });
-
-export const ProjectSchema = z
-  .object({
-    id: ProjectIdSchema,
-    name: z.string().min(1).max(100),
-    todoIds: z.array(TodoIdSchema),
-    createdAt: z.iso.datetime(),
-    updatedAt: z.iso.datetime(),
-  })
-  .meta({ id: 'Project' });
+import { MAX_INITIAL_TODOS, ProjectSchema } from '../../domain/project.ts';
+import { CreateTodoInputSchema, TodoSchema } from '../../domain/todo.ts';
 
 export const CreateProjectInputSchema = z
   .object({
     name: ProjectSchema.shape.name,
+    todos: z.array(CreateTodoInputSchema).max(MAX_INITIAL_TODOS).optional(),
   })
   .meta({ id: 'CreateProject' });
 
+/** A project with its todos resolved; todos deleted since are left out. */
 export const ProjectDetailsSchema = ProjectSchema.omit({ todoIds: true })
   .extend({ todos: z.array(TodoSchema) })
   .meta({ id: 'ProjectDetails' });
@@ -30,7 +21,6 @@ export const ProjectTodoSchema = z
   })
   .meta({ id: 'ProjectTodo' });
 
-export type Project = z.infer<typeof ProjectSchema>;
 export type CreateProjectInput = z.infer<typeof CreateProjectInputSchema>;
 export type ProjectDetails = z.infer<typeof ProjectDetailsSchema>;
 export type ProjectTodo = z.infer<typeof ProjectTodoSchema>;

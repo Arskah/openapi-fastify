@@ -8,11 +8,13 @@ export function projectsCommand(getApi: () => Api) {
 
   projects
     .command('create')
-    .description('Create a project')
+    .description('Create a project, optionally with initial todos (created atomically)')
     .argument('<name>', 'project name')
-    .action(async (name) => {
+    .option('-t, --todo <title...>', 'initial todo titles')
+    .action(async (name, { todo = [] }) => {
       const api = getApi();
-      printJson(await unwrap(api, createProject({ client: api.client, body: { name } })));
+      const todos = todo.map((title) => ({ title }));
+      printJson(await unwrap(api, createProject({ client: api.client, body: { name, todos } })));
     });
 
   projects

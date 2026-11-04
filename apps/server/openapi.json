@@ -59,6 +59,13 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 100
+          },
+          "todos": {
+            "maxItems": 50,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CreateTodoInput"
+            }
           }
         },
         "required": [
@@ -106,24 +113,6 @@
           "done",
           "createdAt",
           "updatedAt"
-        ],
-        "additionalProperties": false
-      },
-      "TodoList": {
-        "type": "object",
-        "properties": {
-          "items": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/Todo"
-            }
-          },
-          "nextCursor": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "items"
         ],
         "additionalProperties": false
       },
@@ -220,6 +209,24 @@
         "required": [
           "project",
           "todo"
+        ],
+        "additionalProperties": false
+      },
+      "TodoList": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Todo"
+            }
+          },
+          "nextCursor": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
         ],
         "additionalProperties": false
       },
@@ -492,7 +499,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Project"
+                  "$ref": "#/components/schemas/ProjectDetails"
                 }
               }
             }

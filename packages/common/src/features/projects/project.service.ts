@@ -1,34 +1,31 @@
-import { randomUUID } from 'node:crypto';
-import type { RunTransaction } from '../../db/transaction.ts';
+import type { ProjectRepository } from '../../data/project.repository.ts';
+import type { TodoRepository } from '../../data/todo.repository.ts';
+import { createProject, type Project } from '../../domain/project.ts';
+import { createTodo, type CreateTodoInput, type Todo } from '../../domain/todo.ts';
 import { NotFoundError } from '../../errors.ts';
 import type { Logger } from '../../logger.ts';
-import type { CreateTodoInput } from '../todos/todo.schema.ts';
-import type { TodoService } from '../todos/todo.service.ts';
-import type { ProjectRepository } from './project.repository.ts';
-import type { CreateProjectInput, Project, ProjectDetails, ProjectTodo } from './project.schema.ts';
+import type { CreateProjectInput, ProjectDetails, ProjectTodo } from './project.schema.ts';
 
 export interface ProjectService {
-  create(input: CreateProjectInput): Promise<Project>;
-  /** Project with its todos resolved; todos deleted since are left out. */
+  /** Creates the project and its initial todos atomically. */
+  create(input: CreateProjectInput): Promise<ProjectDetails>;
   get(id: string): Promise<ProjectDetails>;
   /** Creates a todo and attaches it to the project atomically. */
   addTodo(projectId: string, input: CreateTodoInput): Promise<ProjectTodo>;
 }
 
+/** Mixes domain objects: uses both repositories, never another feature. */
 export interface ProjectServiceDeps {
   logger: Logger;
   projectRepository: ProjectRepository;
-  /** Another feature's service: projects go through todos' public API, not its repository. */
-  todoService: TodoService;
-  transact: RunTransaction;
+  todoRepository: TodoRepository;
   now?: () => Date;
 }
 
 export function createProjectService({
   logger,
   projectRepository,
-  todoService,
-  transact,
+  todoRepository,
   now = () => new Date(),
 }: ProjectServiceDeps): ProjectService {
   const log = logger.child({ component: 'ProjectService' });
@@ -39,35 +36,29 @@ export function createProjectService({
     return project;
   }
 
+  function details({ todoIds: _, ...project }: Project, todos: Todo[]): ProjectDetails {
+    return { ...project, todos };
+  }
+
   return {
     async create(input) {
-      const timestamp = now().toISOString();
-      const project: Project = {
-        id: randomUUID(),
-        name: input.name,
-        todoIds: [],
-        createdAt: timestamp,
-        updatedAt: timestamp,
-      };
-      await projectRepository.create(project);
-      log.info({ id: project.id }, 'project created');
-      return project;
+      const at = now();
+      const todos = (input.todos ?? []).map((todo) => createTodo(todo, at));
+      const project = createProject(input, todos, at);
+      await projectRepository.create(project, todos);
+      log.info({ id: project.id, todos: todos.length }, 'project created');
+      return details(project, todos);
     },
 
     async get(id) {
-      const { todoIds, ...project } = await getProject(id);
-      return { ...project, todos: await todoService.getMany(todoIds) };
+      const project = await getProject(id);
+      return details(project, await todoRepository.getMany(project.todoIds));
     },
 
     async addTodo(projectId, input) {
-      const todo = await transact(async (tx) => {
-        // todoService keeps its rules (id, defaults, timestamps); only the write joins our transaction
-        const todo = await todoService.create(input, { tx });
-        tx.write(projectRepository.appendTodoOp(projectId, todo.id, now().toISOString()), {
-          onConditionFailed: () => new NotFoundError('Project', projectId),
-        });
-        return todo;
-      });
+      const at = now();
+      const todo = createTodo(input, at);
+      await projectRepository.addTodo(projectId, todo, at.toISOString());
 
       // TransactWriteItems returns no attributes, so read the committed project back
       const project = await getProject(projectId, { consistent: true });

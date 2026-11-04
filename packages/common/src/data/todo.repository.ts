@@ -8,73 +8,57 @@ import {
   ScanCommand,
   UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
-import type { CommonConfig } from '../../config.ts';
-import type { DynamoClient } from '../../db/dynamo.ts';
-import type { WriteOp } from '../../db/transaction.ts';
-import { ValidationError } from '../../errors.ts';
-import type { Logger } from '../../logger.ts';
-import type { Todo } from './todo.schema.ts';
+import type { Todo, TodoPatch } from '../domain/todo.ts';
+import { ValidationError } from '../errors.ts';
+import type { RepositoryDeps } from './deps.ts';
+import { todosTable } from './tables/todos.ts';
 
 export interface TodoRepository {
-  /** Insert op for use in a transaction; fails if the id is taken. */
-  createOp(todo: Todo): WriteOp;
   create(todo: Todo): Promise<void>;
   get(id: string): Promise<Todo | undefined>;
-  /** Todos that exist among `ids`, in no particular order. */
-  getMany(ids: string[]): Promise<Todo[]>;
+  /** Todos that exist among `ids`, in the order given. */
+  getMany(ids: readonly string[]): Promise<Todo[]>;
   list(options: { limit: number; cursor?: string }): Promise<{ items: Todo[]; nextCursor?: string }>;
-  update(id: string, changes: Partial<Omit<Todo, 'id' | 'createdAt'>>): Promise<Todo | undefined>;
+  update(id: string, patch: TodoPatch): Promise<Todo | undefined>;
   delete(id: string): Promise<Todo | undefined>;
 }
 
-export interface TodoRepositoryDeps {
-  config: CommonConfig;
-  logger: Logger;
-  dynamo: DynamoClient;
-}
-
-export function createTodoRepository({ config, logger, dynamo }: TodoRepositoryDeps): TodoRepository {
-  const TableName = config.tables.todos;
+export function createTodoRepository({ config, logger, dynamo }: RepositoryDeps): TodoRepository {
+  const table = todosTable(config);
+  const { TableName } = table;
   const log = logger.child({ component: 'TodoRepository' });
 
-  const put = (todo: Todo) => ({
-    TableName,
-    Item: todo,
-    ConditionExpression: 'attribute_not_exists(id)',
-  });
-
   return {
-    createOp(todo) {
-      log.debug({ id: todo.id }, 'queue put todo');
-      return { Put: put(todo) };
-    },
-
     async create(todo) {
       log.debug({ id: todo.id }, 'put todo');
-      await dynamo.send(new PutCommand(put(todo)));
+      await dynamo.send(new PutCommand(table.put(todo).Put));
     },
 
     async get(id) {
       log.debug({ id }, 'get todo');
-      const { Item } = await dynamo.send(new GetCommand({ TableName, Key: { id } }));
-      return Item as Todo | undefined;
+      const { Item } = await dynamo.send(new GetCommand({ TableName, Key: table.key(id) }));
+      return Item && table.fromItem(Item);
     },
 
     async getMany(ids) {
       log.debug({ count: ids.length }, 'batch get todos');
-      const todos: Todo[] = [];
+      const byId = new Map<string, Todo>();
+      const unique = [...new Set(ids)];
       // BatchGetItem accepts at most 100 keys per call
-      for (let i = 0; i < ids.length; i += 100) {
-        let keys: Record<string, unknown>[] | undefined = ids.slice(i, i + 100).map((id) => ({ id }));
+      for (let i = 0; i < unique.length; i += 100) {
+        let keys: Record<string, unknown>[] | undefined = unique.slice(i, i + 100).map(table.key);
         while (keys?.length) {
           const { Responses, UnprocessedKeys }: BatchGetCommandOutput = await dynamo.send(
             new BatchGetCommand({ RequestItems: { [TableName]: { Keys: keys } } }),
           );
-          todos.push(...((Responses?.[TableName] ?? []) as Todo[]));
+          for (const item of Responses?.[TableName] ?? []) {
+            const todo = table.fromItem(item);
+            byId.set(todo.id, todo);
+          }
           keys = UnprocessedKeys?.[TableName]?.Keys;
         }
       }
-      return todos;
+      return ids.flatMap((id) => byId.get(id) ?? []);
     },
 
     async list({ limit, cursor }) {
@@ -87,28 +71,18 @@ export function createTodoRepository({ config, logger, dynamo }: TodoRepositoryD
         }),
       );
       return {
-        items: Items as Todo[],
+        items: Items.map(table.fromItem),
         nextCursor: LastEvaluatedKey ? encodeCursor(LastEvaluatedKey) : undefined,
       };
     },
 
-    async update(id, changes) {
-      const entries = Object.entries(changes).filter(([, value]) => value !== undefined);
-      log.debug({ id, fields: entries.map(([key]) => key) }, 'update todo');
-
+    async update(id, patch) {
+      log.debug({ id, fields: Object.keys(patch) }, 'update todo');
       try {
         const { Attributes } = await dynamo.send(
-          new UpdateCommand({
-            TableName,
-            Key: { id },
-            ConditionExpression: 'attribute_exists(id)',
-            UpdateExpression: `SET ${entries.map(([key]) => `#${key} = :${key}`).join(', ')}`,
-            ExpressionAttributeNames: Object.fromEntries(entries.map(([key]) => [`#${key}`, key])),
-            ExpressionAttributeValues: Object.fromEntries(entries.map(([key, value]) => [`:${key}`, value])),
-            ReturnValues: 'ALL_NEW',
-          }),
+          new UpdateCommand({ ...table.update(id, patch).Update, ReturnValues: 'ALL_NEW' }),
         );
-        return Attributes as Todo;
+        return Attributes && table.fromItem(Attributes);
       } catch (error) {
         if (error instanceof ConditionalCheckFailedException) return undefined;
         throw error;
@@ -118,9 +92,9 @@ export function createTodoRepository({ config, logger, dynamo }: TodoRepositoryD
     async delete(id) {
       log.debug({ id }, 'delete todo');
       const { Attributes } = await dynamo.send(
-        new DeleteCommand({ TableName, Key: { id }, ReturnValues: 'ALL_OLD' }),
+        new DeleteCommand({ TableName, Key: table.key(id), ReturnValues: 'ALL_OLD' }),
       );
-      return Attributes as Todo | undefined;
+      return Attributes && table.fromItem(Attributes);
     },
   };
 }

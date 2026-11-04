@@ -4,7 +4,6 @@ import {
   CreateTodoInputSchema,
   ProjectDetailsSchema,
   ProjectIdSchema,
-  ProjectSchema,
   ProjectTodoSchema,
 } from '@demo/common';
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
@@ -26,7 +25,7 @@ export const projectRoutes: FastifyPluginAsyncZod<{ container: Container<ServerC
         operationId: 'createProject',
         tags,
         body: CreateProjectInputSchema,
-        response: { 201: ProjectSchema, 400: ErrorResponseSchema },
+        response: { 201: ProjectDetailsSchema, 400: ErrorResponseSchema },
       },
     },
     async (request, reply) => {
