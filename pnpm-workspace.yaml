@@ -1,0 +1,9 @@
+packages:
+  - apps/*
+  - packages/*
+
+# Exact versions on `pnpm add`
+savePrefix: ''
+
+# Refuse versions published less than 3 days ago (minutes)
+minimumReleaseAge: 4320

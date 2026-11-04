@@ -1,0 +1,21 @@
+{
+  "name": "@demo/cli",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "demo": "./src/main.ts"
+  },
+  "scripts": {
+    "generate": "openapi-ts",
+    "start": "node src/main.ts"
+  },
+  "dependencies": {
+    "@commander-js/extra-typings": "15.0.0",
+    "commander": "15.0.0"
+  },
+  "devDependencies": {
+    "@hey-api/openapi-ts": "0.99.0",
+    "typescript": "6.0.3"
+  }
+}

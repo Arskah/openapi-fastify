@@ -1,0 +1,23 @@
+{
+  "name": "@demo/server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch --env-file-if-exists=../../.env src/main.ts",
+    "start": "node --env-file-if-exists=../../.env src/main.ts",
+    "openapi": "node scripts/generate-openapi.ts"
+  },
+  "dependencies": {
+    "@demo/common": "workspace:*",
+    "@fastify/swagger": "9.9.3",
+    "@fastify/swagger-ui": "6.1.2",
+    "fastify": "5.12.7",
+    "fastify-type-provider-zod": "7.0.0",
+    "pino": "10.4.0",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "pino-pretty": "13.2.0"
+  }
+}
