@@ -12,6 +12,7 @@ export const CommonConfigSchema = z.object({
   }),
   tables: z.object({
     todos: z.string().min(1),
+    projects: z.string().min(1),
   }),
 });
 
@@ -28,6 +29,7 @@ export function commonConfigFromEnv(env: Env) {
     },
     tables: {
       todos: env.TODOS_TABLE ?? 'todos',
+      projects: env.PROJECTS_TABLE ?? 'projects',
     },
   };
 }

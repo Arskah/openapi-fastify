@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { Command, Option } from '@commander-js/extra-typings';
 import { ApiRequestError, createApi } from './api.ts';
+import { projectsCommand } from './commands/projects.ts';
 import { todosCommand } from './commands/todos.ts';
 
 const program = new Command()
@@ -13,6 +14,7 @@ const program = new Command()
 const getApi = () => createApi(program.opts());
 
 program.addCommand(todosCommand(getApi));
+program.addCommand(projectsCommand(getApi));
 
 try {
   await program.parseAsync();

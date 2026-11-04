@@ -21,6 +21,15 @@ export type UpdateTodoInput = {
 };
 
 /**
+ * Project identifier
+ */
+export type ProjectIdInput = string;
+
+export type CreateProjectInput = {
+    name: string;
+};
+
+/**
  * Todo identifier
  */
 export type TodoId = string;
@@ -37,6 +46,32 @@ export type Todo = {
 export type TodoList = {
     items: Array<Todo>;
     nextCursor?: string;
+};
+
+/**
+ * Project identifier
+ */
+export type ProjectId = string;
+
+export type Project = {
+    id: ProjectId;
+    name: string;
+    todoIds: Array<TodoId>;
+    createdAt: string;
+    updatedAt: string;
+};
+
+export type ProjectDetails = {
+    id: ProjectId;
+    name: string;
+    createdAt: string;
+    updatedAt: string;
+    todos: Array<Todo>;
+};
+
+export type ProjectTodo = {
+    project: Project;
+    todo: Todo;
 };
 
 export type ApiError = {
@@ -183,3 +218,86 @@ export type UpdateTodoResponses = {
 };
 
 export type UpdateTodoResponse = UpdateTodoResponses[keyof UpdateTodoResponses];
+
+export type CreateProjectData = {
+    body: CreateProjectInput;
+    path?: never;
+    query?: never;
+    url: '/projects';
+};
+
+export type CreateProjectErrors = {
+    /**
+     * Default Response
+     */
+    400: ApiError;
+};
+
+export type CreateProjectError = CreateProjectErrors[keyof CreateProjectErrors];
+
+export type CreateProjectResponses = {
+    /**
+     * Default Response
+     */
+    201: Project;
+};
+
+export type CreateProjectResponse = CreateProjectResponses[keyof CreateProjectResponses];
+
+export type GetProjectData = {
+    body?: never;
+    path: {
+        id: ProjectIdInput;
+    };
+    query?: never;
+    url: '/projects/{id}';
+};
+
+export type GetProjectErrors = {
+    /**
+     * Default Response
+     */
+    404: ApiError;
+};
+
+export type GetProjectError = GetProjectErrors[keyof GetProjectErrors];
+
+export type GetProjectResponses = {
+    /**
+     * Default Response
+     */
+    200: ProjectDetails;
+};
+
+export type GetProjectResponse = GetProjectResponses[keyof GetProjectResponses];
+
+export type AddProjectTodoData = {
+    body: CreateTodoInput;
+    path: {
+        id: ProjectIdInput;
+    };
+    query?: never;
+    url: '/projects/{id}/todos';
+};
+
+export type AddProjectTodoErrors = {
+    /**
+     * Default Response
+     */
+    400: ApiError;
+    /**
+     * Default Response
+     */
+    404: ApiError;
+};
+
+export type AddProjectTodoError = AddProjectTodoErrors[keyof AddProjectTodoErrors];
+
+export type AddProjectTodoResponses = {
+    /**
+     * Default Response
+     */
+    201: ProjectTodo;
+};
+
+export type AddProjectTodoResponse = AddProjectTodoResponses[keyof AddProjectTodoResponses];

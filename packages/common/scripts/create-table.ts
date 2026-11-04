@@ -2,6 +2,7 @@
 import { setTimeout as sleep } from 'node:timers/promises';
 import { CreateTableCommand, DynamoDBClient, ResourceInUseException } from '@aws-sdk/client-dynamodb';
 import { loadCommonConfig } from '../src/config.ts';
+import { tables } from '../src/tables.ts';
 
 const config = loadCommonConfig();
 const client = new DynamoDBClient({
@@ -13,25 +14,21 @@ const client = new DynamoDBClient({
 const deadline = Date.now() + 30_000;
 
 try {
-  for (;;) {
-    try {
-      await client.send(
-        new CreateTableCommand({
-          TableName: config.tables.todos,
-          BillingMode: 'PAY_PER_REQUEST',
-          AttributeDefinitions: [{ AttributeName: 'id', AttributeType: 'S' }],
-          KeySchema: [{ AttributeName: 'id', KeyType: 'HASH' }],
-        }),
-      );
-      console.log(`Created table '${config.tables.todos}'`);
-      break;
-    } catch (error) {
-      if (error instanceof ResourceInUseException) {
-        console.log(`Table '${config.tables.todos}' already exists`);
+  for (const definition of tables) {
+    const input = definition(config);
+    for (;;) {
+      try {
+        await client.send(new CreateTableCommand(input));
+        console.log(`Created table '${input.TableName}'`);
         break;
+      } catch (error) {
+        if (error instanceof ResourceInUseException) {
+          console.log(`Table '${input.TableName}' already exists`);
+          break;
+        }
+        if (Date.now() > deadline) throw error;
+        await sleep(500);
       }
-      if (Date.now() > deadline) throw error;
-      await sleep(500);
     }
   }
 } finally {

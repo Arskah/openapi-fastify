@@ -5,6 +5,7 @@ import { createTodoRepository } from './todo.repository.ts';
 import { createTodoService } from './todo.service.ts';
 
 export * from './todo.schema.ts';
+export { todosTable } from './todo.table.ts';
 export type { TodoRepository } from './todo.repository.ts';
 export type { TodoService } from './todo.service.ts';
 export { createTodoRepository, createTodoService };

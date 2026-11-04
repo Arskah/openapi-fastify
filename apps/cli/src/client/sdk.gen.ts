@@ -2,7 +2,7 @@
 
 import { client } from './client.gen.ts';
 import type { Client, ClientMeta, Options as Options2, RequestResult, TDataShape } from './client/index.ts';
-import type { CreateTodoData, CreateTodoErrors, CreateTodoResponses, DeleteTodoData, DeleteTodoErrors, DeleteTodoResponses, GetTodoData, GetTodoErrors, GetTodoResponses, ListTodosData, ListTodosErrors, ListTodosResponses, UpdateTodoData, UpdateTodoErrors, UpdateTodoResponses } from './types.gen.ts';
+import type { AddProjectTodoData, AddProjectTodoErrors, AddProjectTodoResponses, CreateProjectData, CreateProjectErrors, CreateProjectResponses, CreateTodoData, CreateTodoErrors, CreateTodoResponses, DeleteTodoData, DeleteTodoErrors, DeleteTodoResponses, GetProjectData, GetProjectErrors, GetProjectResponses, GetTodoData, GetTodoErrors, GetTodoResponses, ListTodosData, ListTodosErrors, ListTodosResponses, UpdateTodoData, UpdateTodoErrors, UpdateTodoResponses } from './types.gen.ts';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -35,6 +35,26 @@ export const getTodo = <ThrowOnError extends boolean = false>(options: Options<G
 
 export const updateTodo = <ThrowOnError extends boolean = false>(options: Options<UpdateTodoData, ThrowOnError>): RequestResult<UpdateTodoResponses, UpdateTodoErrors, ThrowOnError> => (options.client ?? client).patch<UpdateTodoResponses, UpdateTodoErrors, ThrowOnError>({
     url: '/todos/{id}',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+export const createProject = <ThrowOnError extends boolean = false>(options: Options<CreateProjectData, ThrowOnError>): RequestResult<CreateProjectResponses, CreateProjectErrors, ThrowOnError> => (options.client ?? client).post<CreateProjectResponses, CreateProjectErrors, ThrowOnError>({
+    url: '/projects',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+export const getProject = <ThrowOnError extends boolean = false>(options: Options<GetProjectData, ThrowOnError>): RequestResult<GetProjectResponses, GetProjectErrors, ThrowOnError> => (options.client ?? client).get<GetProjectResponses, GetProjectErrors, ThrowOnError>({ url: '/projects/{id}', ...options });
+
+export const addProjectTodo = <ThrowOnError extends boolean = false>(options: Options<AddProjectTodoData, ThrowOnError>): RequestResult<AddProjectTodoResponses, AddProjectTodoErrors, ThrowOnError> => (options.client ?? client).post<AddProjectTodoResponses, AddProjectTodoErrors, ThrowOnError>({
+    url: '/projects/{id}/todos',
     ...options,
     headers: {
         'Content-Type': 'application/json',

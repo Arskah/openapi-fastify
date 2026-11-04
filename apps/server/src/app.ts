@@ -12,6 +12,7 @@ import {
 import type { ServerConfig } from './config.ts';
 import { errorHandler } from './errors.ts';
 import { transformObject } from './openapi.ts';
+import { projectRoutes } from './routes/projects.ts';
 import { todoRoutes } from './routes/todos.ts';
 
 const REQUEST_ID_HEADER = 'x-request-id';
@@ -50,6 +51,7 @@ export async function buildApp({ logger, container }: AppOptions) {
     openapi: {
       openapi: '3.1.0',
       info: { title: 'Todos API', version: '1.0.0' },
+      tags: [{ name: 'todos' }, { name: 'projects' }],
       servers: [{ url: `http://localhost:${container.config.server.port}` }],
     },
     transform: jsonSchemaTransform,
@@ -59,6 +61,7 @@ export async function buildApp({ logger, container }: AppOptions) {
 
   app.get('/health', { schema: { hide: true } }, () => ({ status: 'ok' }));
   await app.register(todoRoutes, { container });
+  await app.register(projectRoutes, { container });
 
   return app;
 }

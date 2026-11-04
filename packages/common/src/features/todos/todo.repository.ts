@@ -1,5 +1,7 @@
 import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
 import {
+  BatchGetCommand,
+  type BatchGetCommandOutput,
   DeleteCommand,
   GetCommand,
   PutCommand,
@@ -8,13 +10,18 @@ import {
 } from '@aws-sdk/lib-dynamodb';
 import type { CommonConfig } from '../../config.ts';
 import type { DynamoClient } from '../../db/dynamo.ts';
+import type { WriteOp } from '../../db/transaction.ts';
 import { ValidationError } from '../../errors.ts';
 import type { Logger } from '../../logger.ts';
 import type { Todo } from './todo.schema.ts';
 
 export interface TodoRepository {
+  /** Insert op for use in a transaction; fails if the id is taken. */
+  createOp(todo: Todo): WriteOp;
   create(todo: Todo): Promise<void>;
   get(id: string): Promise<Todo | undefined>;
+  /** Todos that exist among `ids`, in no particular order. */
+  getMany(ids: string[]): Promise<Todo[]>;
   list(options: { limit: number; cursor?: string }): Promise<{ items: Todo[]; nextCursor?: string }>;
   update(id: string, changes: Partial<Omit<Todo, 'id' | 'createdAt'>>): Promise<Todo | undefined>;
   delete(id: string): Promise<Todo | undefined>;
@@ -30,22 +37,44 @@ export function createTodoRepository({ config, logger, dynamo }: TodoRepositoryD
   const TableName = config.tables.todos;
   const log = logger.child({ component: 'TodoRepository' });
 
+  const put = (todo: Todo) => ({
+    TableName,
+    Item: todo,
+    ConditionExpression: 'attribute_not_exists(id)',
+  });
+
   return {
+    createOp(todo) {
+      log.debug({ id: todo.id }, 'queue put todo');
+      return { Put: put(todo) };
+    },
+
     async create(todo) {
       log.debug({ id: todo.id }, 'put todo');
-      await dynamo.send(
-        new PutCommand({
-          TableName,
-          Item: todo,
-          ConditionExpression: 'attribute_not_exists(id)',
-        }),
-      );
+      await dynamo.send(new PutCommand(put(todo)));
     },
 
     async get(id) {
       log.debug({ id }, 'get todo');
       const { Item } = await dynamo.send(new GetCommand({ TableName, Key: { id } }));
       return Item as Todo | undefined;
+    },
+
+    async getMany(ids) {
+      log.debug({ count: ids.length }, 'batch get todos');
+      const todos: Todo[] = [];
+      // BatchGetItem accepts at most 100 keys per call
+      for (let i = 0; i < ids.length; i += 100) {
+        let keys: Record<string, unknown>[] | undefined = ids.slice(i, i + 100).map((id) => ({ id }));
+        while (keys?.length) {
+          const { Responses, UnprocessedKeys }: BatchGetCommandOutput = await dynamo.send(
+            new BatchGetCommand({ RequestItems: { [TableName]: { Keys: keys } } }),
+          );
+          todos.push(...((Responses?.[TableName] ?? []) as Todo[]));
+          keys = UnprocessedKeys?.[TableName]?.Keys;
+        }
+      }
+      return todos;
     },
 
     async list({ limit, cursor }) {

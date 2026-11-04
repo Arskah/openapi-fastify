@@ -61,6 +61,43 @@ prints it on errors, so you can grep the server logs for it.
 with its own sections (`ServerConfigSchema`) and passes the whole object into the container,
 whose type parameter keeps the extended config typed on `container.config`.
 
+## Adding a feature
+
+`features/projects` is the reference for a feature that builds on another one.
+`projectService.addTodo` creates a todo and attaches it to the project in one DynamoDB transaction:
+
+```ts
+const todo = await transact(async (tx) => {
+  const todo = await todoService.create(input, { tx }); // todos' rules, write deferred
+  tx.write(projectRepository.appendTodoOp(projectId, todo.id, now), {
+    onConditionFailed: () => new NotFoundError('Project', projectId),
+  });
+  return todo;
+});
+```
+
+The layers split the work this way:
+
+- **Repositories own tables.** They return `WriteOp`s (key, condition, update expression) and
+  do reads. Only the todos repository knows how a todo is stored.
+- **Services own rules** (ids, defaults, timestamps, not-found semantics, post-commit side
+  effects). Write methods take an optional `{ tx }`: without it they write immediately, and with
+  it they queue the write and defer side effects with `tx.afterCommit`.
+- **Other features call services, not repositories.** The transaction runner (`db/transaction.ts`)
+  commits every queued op in one call and maps a failed condition to the error its owner chose.
+
+Checklist, using `projects` as the example:
+
+1. `packages/common/src/features/projects/`: `*.schema.ts`, `*.repository.ts`, `*.service.ts`,
+   `*.table.ts`, and `index.ts` exporting `projectsModule(deps)`
+2. `config.ts`: table name (`tables.projects` / `PROJECTS_TABLE`)
+3. `tables.ts`: add the table definition (`pnpm db:init` creates every listed table)
+4. `container.ts`: add the module to `buildServices`. Composing it before a module it needs
+   (here `todosModule`) is a type error.
+5. `index.ts`: re-export the feature
+6. `apps/server/src/routes/projects.ts`: register it in `app.ts`, then run `pnpm generate`
+7. `apps/cli/src/commands/projects.ts`: add it in `main.ts`
+
 ## Dependency policy
 
 `pnpm-workspace.yaml` pins exact versions (`savePrefix: ''`) and refuses releases younger
