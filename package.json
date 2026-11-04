@@ -7,9 +7,10 @@
     "node": ">=26.13.0"
   },
   "scripts": {
+    "dev": "pnpm db:up && pnpm db:init && pnpm dev:server",
+    "dev:server": "pnpm --filter @demo/server dev",
     "db:up": "docker compose up -d",
     "db:init": "pnpm --filter @demo/common db:init",
-    "dev": "pnpm --filter @demo/server dev",
     "generate": "pnpm --filter @demo/server openapi && pnpm --filter @demo/cli generate",
     "cli": "pnpm --filter @demo/cli --silent start",
     "typecheck": "tsc -p packages/common && tsc -p apps/server && tsc -p apps/cli"

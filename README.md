@@ -16,16 +16,15 @@ apps/cli          commander CLI over a @hey-api/openapi-ts client generated from
 mise install            # node + pnpm versions from mise.toml
 pnpm install
 cp .env.example .env
-pnpm db:up              # DynamoDB Local on :8000
-pnpm db:init            # create the todos table
-pnpm dev                # API on :3000, Swagger UI on /docs
+pnpm dev                # DynamoDB Local on :8000 + todos table + API on :3000 (watch), Swagger UI on /docs
 
 pnpm -s cli todos add "Buy milk"
 pnpm -s cli todos list
 pnpm -s cli -v --request-id my-trace todos update <id> --done
 ```
 
-All TypeScript runs directly on Node (type stripping), so there is no build step.
+`pnpm dev` is `db:up` → `db:init` (waits for DynamoDB) → `dev:server`; run the steps
+individually if you prefer. All TypeScript runs directly on Node (type stripping), so there is no build step.
 
 ## How it fits together
 
