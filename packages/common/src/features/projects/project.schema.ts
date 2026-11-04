@@ -1,6 +1,6 @@
 import { z } from 'zod';
-import { MAX_INITIAL_TODOS, ProjectSchema } from '../../domain/project.ts';
-import { CreateTodoInputSchema, TodoSchema } from '../../domain/todo.ts';
+import { MAX_INITIAL_TODOS, ProjectSchema, type Project } from '../../domain/project.ts';
+import { CreateTodoInputSchema, TodoSchema, type Todo } from '../../domain/todo.ts';
 
 export const CreateProjectInputSchema = z
   .object({
@@ -24,3 +24,7 @@ export const ProjectTodoSchema = z
 export type CreateProjectInput = z.infer<typeof CreateProjectInputSchema>;
 export type ProjectDetails = z.infer<typeof ProjectDetailsSchema>;
 export type ProjectTodo = z.infer<typeof ProjectTodoSchema>;
+
+export function toProjectDetails({ todoIds: _, ...project }: Project, todos: Todo[]): ProjectDetails {
+  return { ...project, todos };
+}

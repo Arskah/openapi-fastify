@@ -1,16 +1,6 @@
-import type { ProjectRepository } from '../../data/project.repository.ts';
-import type { TodoRepository } from '../../data/todo.repository.ts';
-import type { Logger } from '../../logger.ts';
-import { createProjectService } from './project.service.ts';
-
+// Public API for apps. Use cases in other features import the files directly, never this barrel.
+export * from './addTodoToProject.ts';
+export * from './createProject.ts';
+export * from './detachTodoFromProject.ts';
+export * from './getProject.ts';
 export * from './project.schema.ts';
-export type { ProjectService } from './project.service.ts';
-export { createProjectService };
-
-export function projectsModule(deps: {
-  logger: Logger;
-  projectRepository: ProjectRepository;
-  todoRepository: TodoRepository;
-}) {
-  return { projectService: createProjectService(deps) };
-}

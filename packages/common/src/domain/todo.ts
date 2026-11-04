@@ -1,12 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-
-export const TodoIdSchema = z.uuid().meta({ id: 'TodoId', description: 'Todo identifier' });
+import { ProjectIdSchema, TodoIdSchema } from './ids.ts';
 
 /**
- * A valid todo. Branded: a `Todo` only comes from `createTodo` or from parsing
- * (stored data, API responses), never from an object literal, so every todo a
- * repository writes went through the rules below.
+ * A valid todo. Branded: a `Todo` only comes from the functions below or from
+ * parsing (stored data), never from an object literal, so every todo a
+ * repository writes went through these rules.
  */
 export const TodoSchema = z
   .object({
@@ -14,6 +13,8 @@ export const TodoSchema = z
     title: z.string().min(1).max(200),
     description: z.string().max(2000).optional(),
     done: z.boolean(),
+    /** Project the todo belongs to, if any. */
+    projectId: ProjectIdSchema.optional(),
     createdAt: z.iso.datetime(),
     updatedAt: z.iso.datetime(),
   })
@@ -42,21 +43,20 @@ export type Todo = z.infer<typeof TodoSchema>;
 export type CreateTodoInput = z.infer<typeof CreateTodoInputSchema>;
 export type UpdateTodoInput = z.infer<typeof UpdateTodoInputSchema>;
 
-/** Changes to apply to a stored todo; only `todoPatch` produces one. */
-export type TodoPatch = UpdateTodoInput & { updatedAt: string } & z.$brand<'TodoPatch'>;
-
-export function createTodo(input: CreateTodoInput, now: Date): Todo {
+export function newTodo(input: CreateTodoInput, now: Date, options: { projectId?: string } = {}): Todo {
   const timestamp = now.toISOString();
   return TodoSchema.parse({
     id: randomUUID(),
     title: input.title,
     description: input.description,
     done: false,
+    projectId: options.projectId,
     createdAt: timestamp,
     updatedAt: timestamp,
   });
 }
 
-export function todoPatch(input: UpdateTodoInput, now: Date): TodoPatch {
-  return { ...UpdateTodoInputSchema.parse(input), updatedAt: now.toISOString() } as TodoPatch;
+export function applyTodoUpdate(todo: Todo, input: UpdateTodoInput, now: Date): Todo {
+  const changes = Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined));
+  return TodoSchema.parse({ ...todo, ...changes, updatedAt: now.toISOString() });
 }

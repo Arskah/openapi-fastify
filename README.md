@@ -39,23 +39,16 @@ pnpm generate   # writes apps/server/openapi.json, then regenerates apps/cli/src
 ```
 
 **Container.** `createContainer({ config, logger })` in `packages/common/src/container.ts` builds
-everything once per process (DynamoDB client, repositories, services) and composes modules
-bottom-up with `extend()`. Each module is a function `(deps) => provides`. Its parameter type is
-checked against what earlier modules provide, so wiring things in the wrong order fails at
-compile time:
-
-```ts
-function buildServices<C extends CommonConfig>(core: Core<C>) {
-  const data = extend(core, repositoriesModule);
-  return extend(extend(data, todosModule), projectsModule);
-}
-```
+the process-wide infrastructure once: config, context logger, DynamoDB client, repositories and the
+unit of work. Use cases are not in it (see [Use cases](#use-cases)). Modules compose with
+`extend()`, and each module's parameter type is checked against what is already provided.
 
 **Request-scoped logging.** The server derives a request ID from the `x-request-id` header,
 or generates a UUID, and echoes it back. Its `onRequest` hook continues the request inside
 `runWithContext({ logger: request.log }, …)` (AsyncLocalStorage, `packages/common/src/context.ts`).
-Services hold a context logger that writes through the current context's logger. Every log line
-from common code therefore carries `requestId`, even though the services are singletons. Outside a
+Repositories and use cases log through a context logger that writes through the current context's
+logger. Every log line from common code therefore carries `requestId`, even though the
+repositories are singletons. Outside a
 context (startup, scripts), it falls back to the root logger. Other entry points, such as a queue
 worker, can call `runWithContext` the same way. The CLI sends a fresh UUID (or `--request-id`) and
 prints it on errors, so you can grep the server logs for it.
@@ -68,62 +61,91 @@ whose type parameter keeps the extended config typed on `container.config`.
 
 ```
 packages/common/src/
-  domain/            todo.ts, project.ts: entity schemas, branded types, rules (createTodo, createProject)
+  domain/            ids.ts, todo.ts, project.ts: branded entities + rules (newTodo, applyTodoUpdate, newProject, withTodos)
   data/
     tables/          storage format per table: definition, key, item mapping, write ops (no I/O)
-    transaction.ts   transactWrite(): one TransactWriteItems call, failed condition → owner's error
-    *.repository.ts  I/O, one per aggregate
-  features/          use cases; each mixes whatever domain objects and repositories it needs
-  container.ts       core → repositories → features
+    unit-of-work.ts  stages writes; commits them in one TransactWriteItems at the outermost use case
+    transaction.ts   commitWrites(): failed condition → the error chosen by whoever staged the write
+    *.repository.ts  one per table; reads run immediately, writes are staged
+  container.ts       infrastructure only: config, logger, dynamo, repositories, unitOfWork
+  features/
+    use-case.ts      useCase() helper
+    todos/, projects/  one use case per file
 ```
 
-Imports only point down (`features → data → domain`), and `pnpm lint:deps` (dependency-cruiser,
-`.dependency-cruiser.cjs`) enforces it:
+Imports point one way, `features → container → data → domain`. `pnpm lint:deps`
+(dependency-cruiser, `.dependency-cruiser.cjs`) enforces it:
 
 | Rule | Why |
 |---|---|
-| `features-independent` | See below |
-| `repositories-independent` | `ProjectRepository` writes todos, but through `tables/todos.ts`, not `TodoRepository`. If repositories used each other, deleting a todo that must clean up its project would create a cycle. |
-| `tables-without-io` | Table modules can be shared by any repository because they only describe storage. |
-| `domain-is-innermost`, `data-below-features`, `no-circular` | Keep the direction one-way. |
+| `no-circular` | Use cases may call use cases in other features, but the graph must stay acyclic. |
+| `no-cross-feature-barrels` | Import `../todos/createTodo.ts`, not `../todos/index.ts`. A barrel drags in the whole feature, which turns an acyclic graph of use cases into cyclic features. |
+| `container-is-infrastructure` | The container and data layer never import use cases. |
+| `repositories-independent` | Repositories never use each other; atomicity comes from the unit of work. |
+| `tables-without-io`, `domain-is-innermost`, `data-below-container` | Keep the direction one-way. |
 
-**Why features must not import features.** "Create project with todos" could call the todos
-feature's `create`, but:
+## Use cases
 
-- **Atomicity is lost.** A use case runs its own writes, so a caller cannot put them into its
-  transaction without the `{ tx }` double mode on every method (see commit `d79005d`).
-- **Cycles show up quickly.** Projects needs todos for creation, and todos needs projects to clean
-  up `todoIds` on delete. The container cannot express a cycle, and ESM import cycles fail at
-  runtime with "Cannot access X before initialization".
-- **Side effects get tangled.** The callee logs, emits events or enforces permissions for its
-  own use case, and those run inside someone else's flow, sometimes before the caller's commit.
-- **Use cases get coupled to each other.** Changing the todos API's behaviour silently changes
-  projects. Domain rules (`createTodo`) are the stable thing to share, so they live in `domain/`.
+A use case is a plain function `(ctx, ...args)` defined with `useCase()`. It declares the part of the
+container it needs, and apps call it directly:
 
-**Branded entities.** `Todo` and `Project` are Zod-branded. Only `createTodo` / `createProject`
-or parsing (repositories parse stored items) produce them, so a repository cannot be handed an
-object literal that skipped the rules. `TodoPatch` works the same way, via `todoPatch()`.
+```ts
+// features/projects/createProject.ts
+export type CreateProjectDeps = CreateTodoDeps & Pick<Container, 'projectRepository'>;
 
-**Aggregate repositories.** `ProjectRepository` deliberately writes the todos table:
-`create(project, todos)` and `addTodo(projectId, todo)` are single transactions across both tables.
-This couples their storage on purpose, which is normal for DynamoDB. Keep these methods at the
-aggregate level (save a project with its todos), not one per use case, or the repository turns
-into a service layer. Transactions hold at most 100 writes, hence `MAX_INITIAL_TODOS = 50`.
+export const createProject = useCase('createProject', async (ctx: CreateProjectDeps, input: CreateProjectInput) => {
+  const project = newProject(input, now);
+  const todos = await Promise.all(input.todos.map((t) => createTodo(ctx, t, { projectId: project.id })));
+  ctx.projectRepository.create(withTodos(project, todos.map((t) => t.id), now));
+  afterCommit(() => ctx.logger.info({ id: project.id }, 'project created'));
+  return toProjectDetails(project, todos);
+});
 
-Known gap: deleting a todo leaves its id in `project.todoIds` (reads skip missing todos). Fixing
-it needs a `todo.projectId` back-reference and a delete that updates both tables, which is a job
-for the repository that owns the project aggregate.
+// apps/server
+(request) => createProject(container, request.body)
+```
 
-## Adding a feature
+**Composition.** `useCase()` runs the function in a unit of work (AsyncLocalStorage). Called from a
+route, it opens one and commits at the end. Called from another use case, it joins the caller's
+unit of work. So `createProject` → `createTodo` ×N is one transaction, and so is
+`deleteTodo` → `detachTodoFromProject`.
 
-1. Entities and rules → `domain/` (if new)
-2. Storage → `data/tables/<name>.ts` + `tables/index.ts`, table name in `config.ts`, repository in
-   `data/` + `repositoriesModule`
-3. Use cases → `features/<name>/` with `index.ts` exporting `<name>Module(deps)`, added in
-   `container.ts`
-4. Re-export from `src/index.ts`. Add routes in `apps/server/src/routes/` and register them in
-   `app.ts`, then run `pnpm generate` and add a CLI command
-5. `pnpm check`
+**Dependencies are type-checked.** A caller's deps must include its callees' deps
+(`CreateProjectDeps = CreateTodoDeps & …`). Dropping `todoRepository` from it fails to compile.
+
+**Why one file per use case.** A `todoService` object bundles every todo use case, so each one
+inherits the dependencies of all the others. `projects → todos` (for create) plus
+`todos → projects` (for delete cleanup) is then a cycle, even though no single use case depends on
+itself. With one file per use case, the graph is just `createProject → createTodo` and
+`deleteTodo → detachTodoFromProject`.
+
+**Rules of the unit of work** (DynamoDB transactions are write batches, not interactive):
+
+- Staged writes are invisible to reads in the same use case. Express preconditions as conditions
+  (`attribute_exists`, `updatedAt = :expected`, `todoIds[i] = :id`), not read-then-check alone.
+- Writes return nothing. Return the domain object you built (`withTodos(project, …)`), or re-read.
+- At most one write per item and 100 writes per unit of work; `stageWrite` throws early otherwise.
+- Side effects (logs, events) go in `afterCommit`, which runs once after the outermost commit and
+  never if it fails.
+- A unit of work with a single write commits it without a transaction.
+- Read-modify-write uses optimistic locking: `updateTodo` replaces only if `updatedAt` is unchanged,
+  else 409.
+
+**Branded entities.** `Todo` and `Project` are Zod-branded. Only the domain functions or parsing
+(repositories parse stored items) produce them, so a repository cannot be handed an object literal
+that skipped the rules.
+
+**Testing.** Pass a fake `ctx` containing only what the use case declares. A composed use case calls
+the real callee, so fake at the repository boundary.
+
+## Adding a use case or feature
+
+1. Entities and rules → `domain/`. Storage → `data/tables/` + `tables/index.ts`, a repository,
+   `dataModule`, and the table name in `config.ts`
+2. `features/<feature>/<useCase>.ts`, exported from the feature's `index.ts` (for apps only)
+3. Re-export from `src/index.ts`. Add the route in `apps/server/src/routes/`, run `pnpm generate`,
+   and add a CLI command
+4. `pnpm check`
 
 ## Dependency policy
 

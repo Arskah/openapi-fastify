@@ -1,10 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import { TodoIdSchema, type Todo } from './todo.ts';
+import { ProjectIdSchema, TodoIdSchema } from './ids.ts';
 
-export const ProjectIdSchema = z.uuid().meta({ id: 'ProjectId', description: 'Project identifier' });
-
-/** A valid project. Branded like `Todo`: only `createProject` or parsing produce one. */
+/** A valid project. Branded like `Todo`: only the functions below or parsing produce one. */
 export const ProjectSchema = z
   .object({
     id: ProjectIdSchema,
@@ -24,16 +22,21 @@ export type Project = z.infer<typeof ProjectSchema>;
  */
 export const MAX_INITIAL_TODOS = 50;
 
-export function createProject(input: { name: string }, todos: readonly Todo[], now: Date): Project {
-  if (todos.length > MAX_INITIAL_TODOS) {
-    throw new RangeError(`A project can start with at most ${MAX_INITIAL_TODOS} todos`);
-  }
+export function newProject(input: { name: string }, now: Date): Project {
   const timestamp = now.toISOString();
   return ProjectSchema.parse({
     id: randomUUID(),
     name: input.name,
-    todoIds: todos.map((todo) => todo.id),
+    todoIds: [],
     createdAt: timestamp,
     updatedAt: timestamp,
+  });
+}
+
+export function withTodos(project: Project, todoIds: readonly string[], now: Date): Project {
+  return ProjectSchema.parse({
+    ...project,
+    todoIds: [...project.todoIds, ...todoIds],
+    updatedAt: now.toISOString(),
   });
 }

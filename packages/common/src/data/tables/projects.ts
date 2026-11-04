@@ -17,23 +17,39 @@ export function projectsTable(config: CommonConfig) {
   return {
     TableName,
     key: (id: string) => ({ id }),
+    item: (id: string) => `${TableName}#${id}`,
     fromItem: (item: Record<string, unknown>): Project => ProjectSchema.parse(item),
 
     /** Insert; fails if the id is taken. */
-    put: (project: Project) =>
+    insert: (project: Project) =>
       ({
         Put: { TableName, Item: project, ConditionExpression: 'attribute_not_exists(id)' },
       }) satisfies WriteOp,
 
-    /** Appends to `todoIds`; fails if the project does not exist. */
-    appendTodo: (id: string, todoId: string, updatedAt: string) =>
+    /** Atomic append to `todoIds`; fails if the project does not exist. */
+    appendTodos: (id: string, todoIds: readonly string[], updatedAt: string) =>
       ({
         Update: {
           TableName,
           Key: { id },
           ConditionExpression: 'attribute_exists(id)',
           UpdateExpression: 'SET todoIds = list_append(todoIds, :todoIds), updatedAt = :updatedAt',
-          ExpressionAttributeValues: { ':todoIds': [todoId], ':updatedAt': updatedAt },
+          ExpressionAttributeValues: { ':todoIds': todoIds, ':updatedAt': updatedAt },
+        },
+      }) satisfies WriteOp,
+
+    /**
+     * Removes `todoIds[index]`; fails unless that position still holds `todoId`,
+     * so a concurrent change to the list cannot make it remove the wrong id.
+     */
+    removeTodoAt: (id: string, index: number, todoId: string, updatedAt: string) =>
+      ({
+        Update: {
+          TableName,
+          Key: { id },
+          ConditionExpression: `todoIds[${index}] = :todoId`,
+          UpdateExpression: `REMOVE todoIds[${index}] SET updatedAt = :updatedAt`,
+          ExpressionAttributeValues: { ':todoId': todoId, ':updatedAt': updatedAt },
         },
       }) satisfies WriteOp,
   };

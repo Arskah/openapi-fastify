@@ -1,8 +1,6 @@
 import type { CommonConfig } from './config.ts';
 import { createContextLogger } from './context.ts';
-import { createDynamoClient, type DynamoClient, repositoriesModule } from './data/index.ts';
-import { projectsModule } from './features/projects/index.ts';
-import { todosModule } from './features/todos/index.ts';
+import { createDynamoClient, dataModule, type DynamoClient } from './data/index.ts';
 import type { Logger } from './logger.ts';
 
 /** Dependencies every module can rely on. */
@@ -23,17 +21,13 @@ export function extend<D extends object, P extends object>(deps: D, module: (dep
 }
 
 /**
- * Layers are composed bottom-up: core → repositories → features. Features
- * depend on repositories (and domain), never on each other.
+ * Process-wide infrastructure: config, logger, DynamoDB client, repositories
+ * and the unit of work. Use cases are not in here; they are plain functions
+ * (see `features/use-case.ts`) that take the container, or the part of it they
+ * declare, as their first argument.
  */
-function buildServices<C extends CommonConfig>(core: Core<C>) {
-  const data = extend(core, repositoriesModule);
-  return extend(extend(data, todosModule), projectsModule);
-}
-
-export type Container<C extends CommonConfig = CommonConfig> = ReturnType<typeof buildServices<C>> & {
-  dispose(): void;
-};
+export type Container<C extends CommonConfig = CommonConfig> = Core<C> &
+  ReturnType<typeof dataModule> & { dispose(): void };
 
 export interface ContainerOptions<C extends CommonConfig> {
   config: C;
@@ -43,18 +37,15 @@ export interface ContainerOptions<C extends CommonConfig> {
   dynamo?: DynamoClient;
 }
 
-/**
- * Builds every service once for the process. Services log through a context
- * logger, so calls made inside `runWithContext({ logger })` log with that
- * logger (e.g. carrying the request ID) without rebuilding anything.
- */
 export function createContainer<C extends CommonConfig>({
   config,
   logger,
   dynamo = createDynamoClient(config),
 }: ContainerOptions<C>): Container<C> {
+  // Logs go through the current request's logger when there is one (see context.ts)
+  const core: Core<C> = { config, logger: createContextLogger(logger), dynamo };
   return {
-    ...buildServices({ config, logger: createContextLogger(logger), dynamo }),
+    ...extend(core, dataModule),
     dispose: () => dynamo.destroy(),
   };
 }

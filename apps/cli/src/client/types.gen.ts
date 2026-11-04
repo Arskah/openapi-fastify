@@ -9,6 +9,11 @@ export type ClientOptions = {
  */
 export type TodoIdInput = string;
 
+/**
+ * Project identifier
+ */
+export type ProjectIdInput = string;
+
 export type CreateTodoInput = {
     title: string;
     description?: string;
@@ -20,11 +25,6 @@ export type UpdateTodoInput = {
     done?: boolean;
 };
 
-/**
- * Project identifier
- */
-export type ProjectIdInput = string;
-
 export type CreateProjectInput = {
     name: string;
     todos?: Array<CreateTodoInput>;
@@ -35,15 +35,6 @@ export type CreateProjectInput = {
  */
 export type TodoId = string;
 
-export type Todo = {
-    id: TodoId;
-    title: string;
-    description?: string;
-    done: boolean;
-    createdAt: string;
-    updatedAt: string;
-};
-
 /**
  * Project identifier
  */
@@ -53,6 +44,16 @@ export type Project = {
     id: ProjectId;
     name: string;
     todoIds: Array<TodoId>;
+    createdAt: string;
+    updatedAt: string;
+};
+
+export type Todo = {
+    id: TodoId;
+    title: string;
+    description?: string;
+    done: boolean;
+    projectId?: ProjectId;
     createdAt: string;
     updatedAt: string;
 };
@@ -149,6 +150,10 @@ export type DeleteTodoErrors = {
      * Default Response
      */
     404: ApiError;
+    /**
+     * Default Response
+     */
+    409: ApiError;
 };
 
 export type DeleteTodoError = DeleteTodoErrors[keyof DeleteTodoErrors];
@@ -207,6 +212,10 @@ export type UpdateTodoErrors = {
      * Default Response
      */
     404: ApiError;
+    /**
+     * Default Response
+     */
+    409: ApiError;
 };
 
 export type UpdateTodoError = UpdateTodoErrors[keyof UpdateTodoErrors];

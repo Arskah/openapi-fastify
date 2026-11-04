@@ -1,4 +1,4 @@
-// Layering rules for packages/common: domain ← data ← features ← container.
+// Layering rules for packages/common: domain ← data ← container ← features (use cases).
 const src = '^packages/common/src';
 
 /** @type {import('dependency-cruiser').IConfiguration} */
@@ -18,11 +18,11 @@ module.exports = {
       to: { path: `${src}/(data|features|container|context)` },
     },
     {
-      name: 'data-below-features',
-      comment: 'The data layer serves features; it must not depend on them.',
+      name: 'data-below-container',
+      comment: 'The data layer is wired by the container; it must not depend on it.',
       severity: 'error',
       from: { path: `${src}/data/` },
-      to: { path: `${src}/(features|container)` },
+      to: { path: `${src}/container` },
     },
     {
       name: 'repositories-independent',
@@ -40,12 +40,19 @@ module.exports = {
       to: { path: `(${src}/data/(dynamo|[^/]+\\.repository)\\.ts$|@aws-sdk/lib-dynamodb)`, dependencyTypesNot: ['type-only'] },
     },
     {
-      name: 'features-independent',
+      name: 'no-cross-feature-barrels',
       comment:
-        'Features must not import other features. Move shared rules to domain/ and shared persistence to data/.',
+        'Use cases import other features\' use-case files directly. Barrels pull in a whole feature and turn file-level DAGs into feature-level cycles.',
       severity: 'error',
       from: { path: `${src}/features/([^/]+)/` },
-      to: { path: `${src}/features/`, pathNot: `${src}/features/$1/` },
+      to: { path: `${src}/features/[^/]+/index\\.ts$`, pathNot: `${src}/features/$1/` },
+    },
+    {
+      name: 'container-is-infrastructure',
+      comment: 'The container wires infrastructure only; use cases are plain functions that receive it.',
+      severity: 'error',
+      from: { path: `${src}/(container|data/)` },
+      to: { path: `${src}/features/` },
     },
   ],
   options: {

@@ -1,7 +1,6 @@
-// Storage format of todos. No I/O: repositories that write todos, in their own
-// transactions or another entity's, build ops from here.
+// Storage format of todos. No I/O.
 import type { CommonConfig } from '../../config.ts';
-import { TodoSchema, type Todo, type TodoPatch } from '../../domain/todo.ts';
+import { TodoSchema, type Todo } from '../../domain/todo.ts';
 import type { WriteOp } from '../transaction.ts';
 import type { TableDefinition } from './table.ts';
 
@@ -18,27 +17,30 @@ export function todosTable(config: CommonConfig) {
   return {
     TableName,
     key: (id: string) => ({ id }),
+    item: (id: string) => `${TableName}#${id}`,
     fromItem: (item: Record<string, unknown>): Todo => TodoSchema.parse(item),
 
     /** Insert; fails if the id is taken. */
-    put: (todo: Todo) =>
+    insert: (todo: Todo) =>
       ({
         Put: { TableName, Item: todo, ConditionExpression: 'attribute_not_exists(id)' },
       }) satisfies WriteOp,
 
-    /** Partial update of an existing todo. */
-    update: (id: string, patch: TodoPatch) => {
-      const entries = Object.entries(patch).filter(([, value]) => value !== undefined);
-      return {
-        Update: {
+    /** Replace; fails unless the stored todo is unchanged since `expectedUpdatedAt` (optimistic locking). */
+    replace: (todo: Todo, expectedUpdatedAt: string) =>
+      ({
+        Put: {
           TableName,
-          Key: { id },
-          ConditionExpression: 'attribute_exists(id)',
-          UpdateExpression: `SET ${entries.map(([key]) => `#${key} = :${key}`).join(', ')}`,
-          ExpressionAttributeNames: Object.fromEntries(entries.map(([key]) => [`#${key}`, key])),
-          ExpressionAttributeValues: Object.fromEntries(entries.map(([key, value]) => [`:${key}`, value])),
+          Item: todo,
+          ConditionExpression: 'updatedAt = :expectedUpdatedAt',
+          ExpressionAttributeValues: { ':expectedUpdatedAt': expectedUpdatedAt },
         },
-      } satisfies WriteOp;
-    },
+      }) satisfies WriteOp,
+
+    /** Delete; fails if the todo does not exist. */
+    delete: (id: string) =>
+      ({
+        Delete: { TableName, Key: { id }, ConditionExpression: 'attribute_exists(id)' },
+      }) satisfies WriteOp,
   };
 }

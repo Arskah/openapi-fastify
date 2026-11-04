@@ -1,26 +1,20 @@
-import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
-import {
-  BatchGetCommand,
-  type BatchGetCommandOutput,
-  DeleteCommand,
-  GetCommand,
-  PutCommand,
-  ScanCommand,
-  UpdateCommand,
-} from '@aws-sdk/lib-dynamodb';
-import type { Todo, TodoPatch } from '../domain/todo.ts';
-import { ValidationError } from '../errors.ts';
+import { BatchGetCommand, type BatchGetCommandOutput, GetCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
+import type { Todo } from '../domain/todo.ts';
+import { ConflictError, NotFoundError, ValidationError } from '../errors.ts';
 import type { RepositoryDeps } from './deps.ts';
 import { todosTable } from './tables/todos.ts';
+import { stageWrite } from './unit-of-work.ts';
 
+/** Reads run immediately; writes are staged in the current unit of work. */
 export interface TodoRepository {
-  create(todo: Todo): Promise<void>;
   get(id: string): Promise<Todo | undefined>;
   /** Todos that exist among `ids`, in the order given. */
   getMany(ids: readonly string[]): Promise<Todo[]>;
   list(options: { limit: number; cursor?: string }): Promise<{ items: Todo[]; nextCursor?: string }>;
-  update(id: string, patch: TodoPatch): Promise<Todo | undefined>;
-  delete(id: string): Promise<Todo | undefined>;
+  create(todo: Todo): void;
+  /** Saves `todo` if the stored one is unchanged since `expectedUpdatedAt`; else ConflictError on commit. */
+  replace(todo: Todo, expectedUpdatedAt: string): void;
+  delete(id: string): void;
 }
 
 export function createTodoRepository({ config, logger, dynamo }: RepositoryDeps): TodoRepository {
@@ -29,11 +23,6 @@ export function createTodoRepository({ config, logger, dynamo }: RepositoryDeps)
   const log = logger.child({ component: 'TodoRepository' });
 
   return {
-    async create(todo) {
-      log.debug({ id: todo.id }, 'put todo');
-      await dynamo.send(new PutCommand(table.put(todo).Put));
-    },
-
     async get(id) {
       log.debug({ id }, 'get todo');
       const { Item } = await dynamo.send(new GetCommand({ TableName, Key: table.key(id) }));
@@ -76,25 +65,31 @@ export function createTodoRepository({ config, logger, dynamo }: RepositoryDeps)
       };
     },
 
-    async update(id, patch) {
-      log.debug({ id, fields: Object.keys(patch) }, 'update todo');
-      try {
-        const { Attributes } = await dynamo.send(
-          new UpdateCommand({ ...table.update(id, patch).Update, ReturnValues: 'ALL_NEW' }),
-        );
-        return Attributes && table.fromItem(Attributes);
-      } catch (error) {
-        if (error instanceof ConditionalCheckFailedException) return undefined;
-        throw error;
-      }
+    create(todo) {
+      log.debug({ id: todo.id }, 'stage insert todo');
+      stageWrite({
+        op: table.insert(todo),
+        item: table.item(todo.id),
+        onConditionFailed: () => new ConflictError(`Todo '${todo.id}' already exists`),
+      });
     },
 
-    async delete(id) {
-      log.debug({ id }, 'delete todo');
-      const { Attributes } = await dynamo.send(
-        new DeleteCommand({ TableName, Key: table.key(id), ReturnValues: 'ALL_OLD' }),
-      );
-      return Attributes && table.fromItem(Attributes);
+    replace(todo, expectedUpdatedAt) {
+      log.debug({ id: todo.id }, 'stage replace todo');
+      stageWrite({
+        op: table.replace(todo, expectedUpdatedAt),
+        item: table.item(todo.id),
+        onConditionFailed: () => new ConflictError(`Todo '${todo.id}' was modified or deleted concurrently`),
+      });
+    },
+
+    delete(id) {
+      log.debug({ id }, 'stage delete todo');
+      stageWrite({
+        op: table.delete(id),
+        item: table.item(id),
+        onConditionFailed: () => new NotFoundError('Todo', id),
+      });
     },
   };
 }

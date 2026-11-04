@@ -1,7 +1,10 @@
 import {
+  addTodoToProject,
   type Container,
+  createProject,
   CreateProjectInputSchema,
   CreateTodoInputSchema,
+  getProject,
   ProjectDetailsSchema,
   ProjectIdSchema,
   ProjectTodoSchema,
@@ -29,7 +32,7 @@ export const projectRoutes: FastifyPluginAsyncZod<{ container: Container<ServerC
       },
     },
     async (request, reply) => {
-      const project = await container.projectService.create(request.body);
+      const project = await createProject(container, request.body);
       return reply.code(201).send(project);
     },
   );
@@ -44,7 +47,7 @@ export const projectRoutes: FastifyPluginAsyncZod<{ container: Container<ServerC
         response: { 200: ProjectDetailsSchema, 404: ErrorResponseSchema },
       },
     },
-    (request) => container.projectService.get(request.params.id),
+    (request) => getProject(container, request.params.id),
   );
 
   app.post(
@@ -59,7 +62,7 @@ export const projectRoutes: FastifyPluginAsyncZod<{ container: Container<ServerC
       },
     },
     async (request, reply) => {
-      const result = await container.projectService.addTodo(request.params.id, request.body);
+      const result = await addTodoToProject(container, request.params.id, request.body);
       return reply.code(201).send(result);
     },
   );

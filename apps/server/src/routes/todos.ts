@@ -1,10 +1,15 @@
 import {
   type Container,
+  createTodo,
   CreateTodoInputSchema,
+  deleteTodo,
+  getTodo,
+  listTodos,
   ListTodosQuerySchema,
   TodoIdSchema,
   TodoListSchema,
   TodoSchema,
+  updateTodo,
   UpdateTodoInputSchema,
 } from '@demo/common';
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
@@ -29,7 +34,7 @@ export const todoRoutes: FastifyPluginAsyncZod<{ container: Container<ServerConf
         response: { 200: TodoListSchema, 400: ErrorResponseSchema },
       },
     },
-    (request) => container.todoService.list(request.query),
+    (request) => listTodos(container, request.query),
   );
 
   app.post(
@@ -43,7 +48,7 @@ export const todoRoutes: FastifyPluginAsyncZod<{ container: Container<ServerConf
       },
     },
     async (request, reply) => {
-      const todo = await container.todoService.create(request.body);
+      const todo = await createTodo(container, request.body);
       return reply.code(201).send(todo);
     },
   );
@@ -58,7 +63,7 @@ export const todoRoutes: FastifyPluginAsyncZod<{ container: Container<ServerConf
         response: { 200: TodoSchema, 404: ErrorResponseSchema },
       },
     },
-    (request) => container.todoService.get(request.params.id),
+    (request) => getTodo(container, request.params.id),
   );
 
   app.patch(
@@ -69,10 +74,10 @@ export const todoRoutes: FastifyPluginAsyncZod<{ container: Container<ServerConf
         tags,
         params: IdParams,
         body: UpdateTodoInputSchema,
-        response: { 200: TodoSchema, 400: ErrorResponseSchema, 404: ErrorResponseSchema },
+        response: { 200: TodoSchema, 400: ErrorResponseSchema, 404: ErrorResponseSchema, 409: ErrorResponseSchema },
       },
     },
-    (request) => container.todoService.update(request.params.id, request.body),
+    (request) => updateTodo(container, request.params.id, request.body),
   );
 
   app.delete(
@@ -82,11 +87,11 @@ export const todoRoutes: FastifyPluginAsyncZod<{ container: Container<ServerConf
         operationId: 'deleteTodo',
         tags,
         params: IdParams,
-        response: { 204: z.null().describe('Deleted'), 404: ErrorResponseSchema },
+        response: { 204: z.null().describe('Deleted'), 404: ErrorResponseSchema, 409: ErrorResponseSchema },
       },
     },
     async (request, reply) => {
-      await container.todoService.delete(request.params.id);
+      await deleteTodo(container, request.params.id);
       return reply.code(204).send(null);
     },
   );
