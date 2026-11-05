@@ -1,9 +1,9 @@
-import type { Container } from '../../container.ts';
 import { newTodo, type CreateTodoInput, type Todo } from '../../domain/todo.ts';
+import type { TodoRepository } from '../../repositories/todo.repository.ts';
 import { useTransaction, type Transactional, type TransactionDeps } from '../transaction.ts';
 import { useCase, type UseCaseContext } from '../use-case.ts';
 
-export type CreateTodoDeps = UseCaseContext & TransactionDeps & Pick<Container, 'todoRepository'>;
+export type CreateTodoDeps = UseCaseContext & TransactionDeps & { todoRepository: TodoRepository };
 
 /** With `projectId`, the caller is responsible for adding the todo to that project. */
 export const createTodo = useCase(

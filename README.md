@@ -127,6 +127,7 @@ Imports point one way, `features → repositories ← integrations`, with `conta
 |---|---|
 | `no-circular` | Use cases may call use cases in other features, but the graph must stay acyclic. |
 | `no-cross-feature-barrels` | Import `../todos/createTodo.ts`, not `../todos/index.ts`. A barrel drags in the whole feature, which turns an acyclic graph of use cases into cyclic features. |
+| `features-without-container` | Use cases name ports in their `Deps`, never `Pick<Container, …>`, so they cannot ask for the DynamoDB client or anything else the container holds. |
 | `features-use-ports` | Use cases import ports, never `integrations/`. Storage ops, clients and tables stay behind the port, so a use case cannot stage raw DynamoDB writes. |
 | `ports-are-abstract` | `repositories/` depends on nothing but `domain/`. |
 | `integrations-independent` | Each integration stands alone; the container combines them. |
@@ -136,12 +137,12 @@ Imports point one way, `features → repositories ← integrations`, with `conta
 
 ## Use cases
 
-A use case is a plain function `(ctx, ...args)` defined with `useCase()`. It declares the part of the
-container it needs, and apps call it directly:
+A use case is a plain function `(ctx, ...args)` defined with `useCase()`. Its `ctx` type names the ports
+it needs, not keys of the container, and apps pass the container directly. It matches by shape:
 
 ```ts
 // features/projects/createProject.ts
-export type CreateProjectDeps = CreateTodoDeps & Pick<Container, 'projectRepository'>;
+export type CreateProjectDeps = CreateTodoDeps & { projectRepository: ProjectRepository };
 
 export const createProject = useCase(
   'createProject',
@@ -350,7 +351,7 @@ ctx.todoRepository.create(todo) })`). Reads return domain objects, and writes re
 **Pros**
 
 - Option 4's explicit, typed error handling.
-- Keeps the type-checked dependencies (`Pick<Container, …>`) and fakes passed in.
+- Keeps the type-checked dependencies (`{ todoRepository: TodoRepository }`) and fakes passed in.
 
 **Cons**
 

@@ -1,10 +1,10 @@
-import type { Container } from '../../container.ts';
 import { applyTodoUpdate, type Todo, type UpdateTodoInput } from '../../domain/todo.ts';
+import type { TodoRepository } from '../../repositories/todo.repository.ts';
 import { useTransaction, type Transactional, type TransactionDeps } from '../transaction.ts';
 import { useCase, type UseCaseContext } from '../use-case.ts';
 import { getTodo } from './getTodo.ts';
 
-export type UpdateTodoDeps = UseCaseContext & TransactionDeps & Pick<Container, 'todoRepository'>;
+export type UpdateTodoDeps = UseCaseContext & TransactionDeps & { todoRepository: TodoRepository };
 
 export const updateTodo = useCase(
   'updateTodo',

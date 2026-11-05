@@ -1,8 +1,9 @@
-import type { Container } from '../container.ts';
-import type { Transaction } from '../repositories/transaction.ts';
+import type { RootTransaction, Transaction } from '../repositories/transaction.ts';
 
 /** What a transactional use case needs besides its repositories. */
-export type TransactionDeps = Pick<Container, 'beginTransaction'>;
+export interface TransactionDeps {
+  beginTransaction(): RootTransaction;
+}
 
 /** `ctx` inside a `useTransaction()` use case: repository writes take `ctx.tx`. */
 export type Transactional<D> = D & { tx: Transaction };

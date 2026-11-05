@@ -35,6 +35,14 @@ module.exports = {
       to: { path: `${src}/integrations/` },
     },
     {
+      name: 'features-without-container',
+      comment:
+        'Use cases declare the ports they need ({ todoRepository: TodoRepository }), not keys of the container. Seeing the Container type would let a use case ask for the DynamoDB client.',
+      severity: 'error',
+      from: { path: `${src}/features/` },
+      to: { path: `${src}/container` },
+    },
+    {
       name: 'integrations-independent',
       comment: 'Each integration (dynamo/, http/, …) stands alone; the container combines them.',
       severity: 'error',

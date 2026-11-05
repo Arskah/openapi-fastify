@@ -1,8 +1,8 @@
-import type { Container } from '../../container.ts';
+import type { ProjectRepository } from '../../repositories/project.repository.ts';
 import { useTransaction, type Transactional, type TransactionDeps } from '../transaction.ts';
 import { useCase, type UseCaseContext } from '../use-case.ts';
 
-export type DetachTodoFromProjectDeps = UseCaseContext & TransactionDeps & Pick<Container, 'projectRepository'>;
+export type DetachTodoFromProjectDeps = UseCaseContext & TransactionDeps & { projectRepository: ProjectRepository };
 
 /** Removes the todo from the project's list; a no-op if either is already gone. */
 export const detachTodoFromProject = useCase(

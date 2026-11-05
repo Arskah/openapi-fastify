@@ -1,13 +1,13 @@
-import type { Container } from '../../container.ts';
 import { withTodos } from '../../domain/project.ts';
 import type { CreateTodoInput } from '../../domain/todo.ts';
 import { NotFoundError } from '../../errors.ts';
+import type { ProjectRepository } from '../../repositories/project.repository.ts';
 import { createTodo, type CreateTodoDeps } from '../todos/createTodo.ts';
 import { useTransaction, type Transactional } from '../transaction.ts';
 import { useCase } from '../use-case.ts';
 import type { ProjectTodo } from './project.schema.ts';
 
-export type AddTodoToProjectDeps = CreateTodoDeps & Pick<Container, 'projectRepository'>;
+export type AddTodoToProjectDeps = CreateTodoDeps & { projectRepository: ProjectRepository };
 
 /** Creates a todo (via `createTodo`) and appends it to the project in one transaction. */
 export const addTodoToProject = useCase(

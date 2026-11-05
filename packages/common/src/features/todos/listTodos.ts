@@ -1,8 +1,8 @@
-import type { Container } from '../../container.ts';
+import type { TodoRepository } from '../../repositories/todo.repository.ts';
 import { useCase, type UseCaseContext } from '../use-case.ts';
 import type { ListTodosQuery, TodoList } from './todo.schema.ts';
 
-export type ListTodosDeps = UseCaseContext & Pick<Container, 'todoRepository'>;
+export type ListTodosDeps = UseCaseContext & { todoRepository: TodoRepository };
 
 export const listTodos = useCase(
   'listTodos',
