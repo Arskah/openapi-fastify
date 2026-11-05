@@ -42,8 +42,9 @@ schemas or routes, run:
 pnpm generate   # writes apps/server/openapi.json, then regenerates packages/api-client/src/client
 ```
 
-**Container.** `createContainer({ config, logger })` in `packages/common/src/container.ts` builds
-the process-wide infrastructure once: config, context logger, DynamoDB client, repositories and the
+**Container.** `createContainer({ config, logger, featureFlags })` in `packages/common/src/container.ts`
+builds the process-wide infrastructure once: config, context logger, DynamoDB client, feature flags
+(started by the app beforehand, see [Feature flags](#feature-flags)), repositories and the
 `beginTransaction`. Use cases are not in it (see [Use cases](#use-cases)). Modules compose with
 `extend()`, and each module's parameter type is checked against what is already provided.
 
@@ -67,12 +68,15 @@ returns `ApiRequestError`s to Stricli so it prints just the message, e.g.
 
 **Lambda.** Every handler in `apps/lambda` is wrapped with `lambdaHandler()` (`src/lambda.ts`).
 On the first invocation in a sandbox it builds config, the Lambda's own pino logger (`src/logger.ts`)
-and the container, and reuses them while the sandbox stays warm. Each invocation runs inside
+the feature flag provider and the container, and reuses them while the sandbox stays warm. Startup is
+async (feature flags download their rules), so the cached runtime is a promise, reset on failure so
+the next invocation retries. Each invocation runs inside
 `runWithContext` with a child logger bound to `requestId` (the Lambda request ID) and
 `aws: { accountId, region, functionName, functionVersion, traceId }`, with the account and region
 taken from `invokedFunctionArn`. Common code logs through the container's context logger, so every
 line it writes carries those AWS fields without knowing it runs in Lambda. The wrapper also
-logs invocation start (with `coldStart`), duration and failures. A handler gets
+logs invocation start (with `coldStart`), duration and failures, and flushes feature flag exposure
+events before returning, since a frozen sandbox sends nothing in the background. A handler gets
 `{ container, logger, context }`.
 
 `sqsHandler(schema, handle)` (`src/sqs.ts`) builds on it for SQS: it parses each record's body with
@@ -98,9 +102,10 @@ whose type parameter keeps the extended config typed on `container.config`.
 ```
 packages/common/src/
   domain/              ids.ts, todo.ts, project.ts: branded entities + rules (newTodo, applyTodoUpdate, newProject, withTodos)
-  ports/               what use cases depend on (interfaces only)
+  ports/               what use cases depend on (interfaces, plus the flag catalogue)
     todo.repository.ts, project.repository.ts
     transaction.ts     Transaction (afterCommit, rollbackOnly) and RootTransaction (+ commit)
+    feature-flags.ts   FeatureFlags (isEnabled, value), Gate / FlagValues + defaults, FeatureFlagProvider
   integrations/        adapters: one directory per external system
     dynamo/
       client.ts        DynamoClient: send() for reads, writeAtomically() (failed condition → the writer's error)
@@ -108,7 +113,10 @@ packages/common/src/
       write.ts         Write / WriteOp: storage ops built by tables/
       tables/          storage format per table: definition, key, item mapping, write ops (no I/O)
       *.repository.ts  implement the ports; reads run immediately, writes stage into the transaction
-  container.ts         infrastructure only: config, logger, dynamo, repositories, beginTransaction
+    statsig/           FeatureFlagProvider on the Statsig server SDK
+    static-flags/      FeatureFlagProvider with fixed flags (tests, no Statsig key)
+  container.ts         infrastructure only: config, logger, dynamo, feature flags, repositories, beginTransaction
+  feature-flags.ts     startFeatureFlags(): Statsig when a key is set, static flags otherwise
   features/
     use-case.ts        useCase() helper
     transaction.ts     useTransaction(): declares a use case transactional
@@ -124,8 +132,9 @@ API has no transactions. Its write methods would not take `tx`, and would run im
 
 **Public API.** Apps import only `@demo/common`, and `package.json` `exports` blocks deep imports.
 `src/index.ts` names what that includes: config, `createContainer`, `runWithContext`, errors, entity and
-input schemas, and each feature's use cases and schemas (from the feature's `index.ts`). Domain rule
-functions, ports, `useCase`/`useTransaction`, `Deps` types and the DynamoDB integration stay
+input schemas, each feature's use cases and schemas (from the feature's `index.ts`), and the feature
+flag types, `startFeatureFlags` and `staticFeatureFlags` apps need to start and bind flags. Domain rule
+functions, repository ports, `useCase`/`useTransaction`, `Deps` types and the DynamoDB integration stay
 internal, so an app cannot bypass a use case or write to DynamoDB directly.
 
 Imports point one way, `features → ports ← integrations`, with `container` wiring them together and
@@ -140,7 +149,8 @@ Imports point one way, `features → ports ← integrations`, with `container` w
 | `ports-are-abstract`                                                       | `ports/` depends on nothing but `domain/`.                                                                                                                     |
 | `integrations-independent`                                                 | Each integration stands alone; the container combines them.                                                                                                    |
 | `repositories-independent`                                                 | Repository implementations never use each other; atomicity comes from the use case's transaction.                                                              |
-| `container-is-infrastructure`                                              | The container, ports and integrations never import use cases.                                                                                                  |
+| `container-is-infrastructure`                                              | The container, flag provider wiring, ports and integrations never import use cases.                                                                            |
+| `vendor-sdks-in-their-integration`                                         | Only `integrations/statsig/` imports the Statsig SDK, so a use case never handles a `StatsigUser`.                                                             |
 | `tables-without-io`, `domain-is-innermost`, `integrations-below-container` | Keep the direction one-way.                                                                                                                                    |
 
 ## Use cases
@@ -719,6 +729,112 @@ combine both. The container chooses the adapter, and use cases see only `Messagi
 **Recommendation:** option B for domain events, because it is the only adapter that keeps the
 transaction's all-or-nothing contract. Use option A only for messages where loss is acceptable. Both
 can coexist, as two ports, or one port with a per-message choice, since the use case code is the same.
+
+## Feature flags
+
+Use cases read feature flags through the `FeatureFlags` port (`ports/feature-flags.ts`). Both apps
+start Statsig behind it; tests and a setup without a Statsig key use fixed flags.
+
+```ts
+// ports/feature-flags.ts
+export type Gate = 'enforce_project_todo_limit';
+export interface FlagValues {
+  maxTodosPerProject: number;
+}
+export const FLAG_DEFAULTS: FlagValues = { maxTodosPerProject: 50 };
+
+export interface FeatureFlags {
+  isEnabled(gate: Gate, subject?: FlagSubject): boolean;
+  value<K extends keyof FlagValues>(key: K, subject?: FlagSubject): FlagValues[K];
+}
+
+// features/projects/addTodoToProject.ts
+export type AddTodoToProjectDeps = CreateTodoDeps & {
+  projectRepository: ProjectRepository;
+  featureFlags: FeatureFlags;
+};
+
+if (ctx.featureFlags.isEnabled('enforce_project_todo_limit')) {
+  const max = ctx.featureFlags.value('maxTodosPerProject');
+  if (project.todoIds.length >= max) throw new ConflictError(`Project '${projectId}' already has ${max} todos`);
+}
+```
+
+**Why a port, with one vendor.** Not to swap vendors. The port buys three things:
+
+- **Use cases never handle vendor types.** Statsig evaluates per `StatsigUser`; a use case passes a
+  plain `{ userId }`, or nothing.
+- **A typed catalogue.** Gate and value names live in common: a typo does not compile, a grep finds
+  every use, and each value has one default.
+- **Checks cannot do I/O.** The port is synchronous. Statsig evaluates locally after downloading its
+  rules at startup, so a flag check inside a transaction adds no latency and no failure mode.
+
+Flags read only at the edge, such as a gated route or a disabled Lambda, need no port: an app can call
+Statsig directly there, through `Statsig.shared()`. The adapter starts Statsig's shared instance
+(`Statsig.newShared`), so the edge and common evaluate against the same instance and rules. There is one
+per process: starting it twice throws (the SDK itself would only warn and hand back a dead instance with
+every gate off), and `shutdown()` releases it. The port is for checks inside common code.
+
+**Startup is async; checks are sync and live.** Each app calls `startFeatureFlags()` before it serves
+anything, next to `createContainer`, which stays synchronous. Startup downloads the rules once, so the
+first request does not wait for them; after that the SDK re-syncs them in the background every 10 s
+(`RULES_SYNC_INTERVAL_MS`). Nothing caches an evaluation: every `isEnabled()` or `value()` call reads
+the rules the SDK holds at that moment, so a change in the Statsig console applies within one sync
+interval, with no restart. Read a flag once per decision, since two calls in one use case can straddle
+a sync. A Lambda sandbox does not sync while frozen, so its first invocation after a thaw may still
+see rules up to the age of the freeze, until the next sync. The static provider is fixed by design.
+
+```ts
+// apps/server/src/main.ts
+const featureFlags = await startFeatureFlags({ ...featureFlagsFromEnv(process.env), logger });
+const container = createContainer({ config, logger, featureFlags });
+const app = await buildApp({ logger, container });
+app.addHook('onClose', async () => {
+  await featureFlags.shutdown(); // flushes exposure events; the app started it, so the app stops it
+  container.dispose();
+});
+```
+
+The Lambda does the same on the cold start (`getRuntime()` caches the promise and resets it on
+failure) and flushes per invocation. `STATSIG_SERVER_SECRET` is read from the environment and goes
+to the provider only, never into `CommonConfig`, because the container's config is visible to use
+cases. With async configuration (e.g. Secrets Manager), the secret is fetched in the same place,
+before `startFeatureFlags`.
+
+**The call site decides the subject.** Flags are one process-wide provider in the container, like the
+repositories. Each check passes a subject when it has one and omits it for a global check:
+
+```ts
+ctx.featureFlags.isEnabled('enforce_project_todo_limit'); // global: same answer for everyone
+ctx.featureFlags.isEnabled('enforce_project_todo_limit', { userId: input.ownerId }); // per user
+```
+
+A global check is evaluated in Statsig for one fixed user (`userID: 'global'`), so percentage rollouts
+and user targeting do not apply to it; environment targeting and on/off do. A per-user check needs the
+user as a use case input, like any other business input: nothing reads it from the request or from
+AsyncLocalStorage, for the same reason transactions are explicit. Today no use case has a user, so
+`addTodoToProject` checks globally. Tests pass `featureFlags: staticFeatureFlags({ gates: { … } })` to
+`createContainer`, which ignores subjects.
+
+**Failure modes.**
+
+- **Statsig unreachable or key invalid at startup:** `initialize()` reports failure, the adapter logs a
+  warning, and every gate is off with default values. The app starts: a flag provider outage must not
+  take the service down. Gates are therefore written so that off means the old behaviour.
+- **Wrong value type in Statsig:** `get(field, default)` returns the default.
+- **Exposure events lost:** flush and shutdown failures are logged, never thrown, so they cannot fail
+  a request or an invocation.
+- **SDK logging:** the SDK prints plain-text lines to stdout, set to `error` only, because the adapter
+  logs the failures that matter in structured form. Its `outputLoggerProvider` hook would route lines
+  through our logger, but in 0.24.0 it keeps the event loop alive after `shutdown()`.
+- **Limits from flags are soft:** `addTodoToProject` counts todos from an eventually consistent read,
+  so concurrent adds can overshoot `maxTodosPerProject`. Fine for a product limit. An invariant needs a
+  condition on the write instead.
+
+**Adding a flag.** Add it to `Gate` or to `FlagValues` and `FLAG_DEFAULTS`; for a value, map it to a
+Statsig dynamic config field in `VALUE_SOURCES` (`integrations/statsig/index.ts`); declare
+`featureFlags: FeatureFlags` in the use case's `Deps`. Gate names are used as-is in Statsig. Remove
+the entry when the flag is retired, and the compiler finds the last checks.
 
 ## Adding a use case or feature
 

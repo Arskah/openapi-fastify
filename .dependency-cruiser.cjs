@@ -40,7 +40,7 @@ module.exports = {
         'Use cases declare the ports they need ({ todoRepository: TodoRepository }), not keys of the container. Seeing the Container type would let a use case ask for the DynamoDB client.',
       severity: 'error',
       from: { path: `${src}/features/` },
-      to: { path: `${src}/container` },
+      to: { path: `${src}/(container|feature-flags)\\.ts$` },
     },
     {
       name: 'integrations-independent',
@@ -51,10 +51,10 @@ module.exports = {
     },
     {
       name: 'integrations-below-container',
-      comment: 'Integrations are wired by the container; they must not depend on it.',
+      comment: 'Integrations are wired by the container (and feature-flags.ts); they must not depend on it.',
       severity: 'error',
       from: { path: `${src}/integrations/` },
-      to: { path: `${src}/container` },
+      to: { path: `${src}/(container|feature-flags)\\.ts$` },
     },
     {
       name: 'repositories-independent',
@@ -75,6 +75,14 @@ module.exports = {
       },
     },
     {
+      name: 'vendor-sdks-in-their-integration',
+      comment:
+        'Only integrations/statsig/ sees the Statsig SDK. Use cases check flags through the FeatureFlags port, already bound to a subject, so they never handle a StatsigUser.',
+      severity: 'error',
+      from: { pathNot: `${src}/integrations/statsig/` },
+      to: { path: '@statsig/' },
+    },
+    {
       name: 'no-cross-feature-barrels',
       comment:
         "Use cases import other features' use-case files directly. Barrels pull in a whole feature and turn file-level DAGs into feature-level cycles.",
@@ -84,9 +92,9 @@ module.exports = {
     },
     {
       name: 'container-is-infrastructure',
-      comment: 'The container, ports and integrations never import use cases.',
+      comment: 'The container, flag provider wiring, ports and integrations never import use cases.',
       severity: 'error',
-      from: { path: `${src}/(container|ports/|integrations/)` },
+      from: { path: `${src}/(container|feature-flags|ports/|integrations/)` },
       to: { path: `${src}/features/` },
     },
   ],

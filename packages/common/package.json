@@ -12,6 +12,7 @@
   "dependencies": {
     "@aws-sdk/client-dynamodb": "3.1161.0",
     "@aws-sdk/lib-dynamodb": "3.1161.0",
+    "@statsig/statsig-node-core": "0.24.0",
     "zod": "4.6.7"
   }
 }

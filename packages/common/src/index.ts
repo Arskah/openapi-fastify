@@ -1,10 +1,13 @@
 // Public API of @demo/common: what apps need to configure it, wire it, call use cases and expose their
-// schemas. Internals (domain rules, ports, the DynamoDB integration, useCase/useTransaction) are not
+// schemas. Internals (domain rules, repository ports, the DynamoDB integration, useCase/useTransaction) are not
 // exported, so apps cannot bypass the use cases.
 
 // Configuration and wiring
 export { CommonConfigSchema, commonConfigFromEnv, loadCommonConfig, type CommonConfig } from './config.ts';
 export { createContainer, type Container, type ContainerOptions } from './container.ts';
+export { featureFlagsFromEnv, startFeatureFlags, type FeatureFlagsOptions } from './feature-flags.ts';
+export { staticFeatureFlags, type StaticFlags } from './integrations/static-flags/index.ts';
+export type { FeatureFlagProvider, FeatureFlags, FlagSubject, FlagValues, Gate } from './ports/feature-flags.ts';
 export { runWithContext, type RequestContext } from './context.ts';
 export type { Logger, LogFn } from './logger.ts';
 
