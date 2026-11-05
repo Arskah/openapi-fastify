@@ -55,7 +55,8 @@ repositories are singletons. Outside a
 context (startup, scripts), it falls back to the root logger. Other entry points, such as a queue
 worker, call `runWithContext` the same way, as `apps/lambda` does (see Lambda below). The CLI
 sends a fresh UUID (or `--request-id`) and
-prints it on errors, so you can grep the server logs for it.
+prints it on errors, so you can grep the server logs for it. Why ALS is used for logging but not for
+transactions: [AsyncLocalStorage: for logging, not for transactions](#asynclocalstorage-for-logging-not-for-transactions).
 
 **CLI.** Stricli has no global flags, so every API command spreads `apiFlags` (`--api-url`,
 `--request-id`, `-v`) from `apps/cli/src/context.ts` into its own flags. They go after the
@@ -191,7 +192,9 @@ itself. With one file per use case, the graph is just `createProject → createT
 - Writes return nothing. Return the domain object you built (`withTodos(project, …)`), or re-read.
 - At most one write per item and 100 writes per transaction; staging throws early otherwise.
 - Side effects (logs, events) go in `ctx.tx.afterCommit`, which runs once after the outermost commit and
-  never if it fails.
+  never if it fails. Hooks may be async. The commit awaits them one by one, in the order they were
+  added, so the use case returns after its side effects. A failing hook is logged, not rethrown,
+  because the writes are already committed.
 - A transaction with a single write commits it as a plain Put, Update or Delete (half the cost).
 - Read-modify-write uses optimistic locking: `updateTodo` replaces only if `updatedAt` is unchanged,
   else 409.
@@ -305,7 +308,8 @@ only on the `RootTransaction` that `beginTransaction()` returns, and only `useTr
 - **Floating promises.** A callee that is not awaited may stage after the commit (it throws) or race
   it. Await every use case.
 - **`afterCommit` is not durable.** A crash after the commit loses the hook. It is fine for logs;
-  events need an outbox (an item written in the same transaction) or DynamoDB Streams.
+  events need an outbox (an item written in the same transaction) or DynamoDB Streams. See
+  [Messaging and transactions](#messaging-and-transactions-design-not-implemented).
 - **Retries are not idempotent.** SQS delivers at least once. If `createTodo` commits and the
   invocation then fails, the redelivered message creates a second todo with a new ID. That needs an
   idempotency key, such as deriving the ID from the message ID or writing a guard item in the same
@@ -387,8 +391,7 @@ use case owns the boundary, and only the repository knows DynamoDB.
   opens or joins a unit of work in AsyncLocalStorage, and repositories call a global `stageWrite()`.
   It is the least code and composes automatically. But the boundary is a framework rule, not a
   business decision. Repositories depend on hidden module state, and a missing wrapper only fails at
-  runtime. The pattern in [this article](https://wempe.dev/blog/nodejs-async-local-storage-context)
-  is the same, except that outside a transaction it falls back to plain `db` and auto-commits.
+  runtime. See [AsyncLocalStorage: for logging, not for transactions](#asynclocalstorage-for-logging-not-for-transactions).
 - **2. `transaction(ctx, async (ctx) => …)` inside the body.** It has the same type safety as option 3,
   and lets a use case read before the transaction or run two of them. But it depends on shadowing
   `ctx`: passing the outer one to a callee silently opens a separate, non-atomic transaction.
@@ -411,6 +414,69 @@ use case owns the boundary, and only the repository knows DynamoDB.
 | 5 Hybrid | ✓ | n/a | ✗ manual | ✗ partly | use case |
 | 6 Aggregate + events | ✓ | n/a | via events | ✓ | each handler |
 
+### AsyncLocalStorage: for logging, not for transactions
+
+A common Node.js pattern carries the transaction in AsyncLocalStorage (ALS), as in
+[this article on wempe.dev](https://wempe.dev/blog/nodejs-async-local-storage-context). The
+caller opens a transaction, and repositories pick it up without it appearing in any signature:
+
+```ts
+// caller
+await provideTransaction(async () => {
+  await createUser(data);          // no tx parameter
+  await createUserProfile(data);
+});
+
+// repository: finds the transaction itself, or falls back to the plain db handle
+export const createUser = (data) => useTransactionOrDb((tx) => tx.insert(users).values(data));
+```
+
+This repo's earlier design (option 1) worked the same way. Option 3 passes the transaction explicitly
+instead:
+
+```ts
+export const createProject = useCase('createProject', useTransaction(async (ctx: Transactional<Deps>, input) => {
+  await createTodo(ctx, …);                       // the transaction travels in ctx
+  ctx.projectRepository.create(ctx.tx, project);  // the repository is handed it
+}));
+```
+
+| | ALS (article) | Explicit `ctx.tx` (option 3) |
+|---|---|---|
+| How the transaction reaches the repository | Hidden: the repository reads the ambient store | Passed as an argument |
+| Who opens and commits it | Any caller of `provideTransaction()` | Only a use case declared with `useTransaction()` |
+| A write outside any transaction | Silently auto-commits through plain `db` | Does not compile (`ctx.tx` does not exist) |
+| Is it visible in signatures? | No; repositories stay unchanged, which the article calls open/closed | Yes: `create(tx, todo)`, `Transactional<Deps>` |
+| Does this use case write? | Only by reading its body | Visible where it is defined |
+| Nested calls | Reuse the ambient transaction | Join `ctx.tx`; only the outermost commits |
+| A failed callee whose error the caller swallows | Not addressed; with SQL, its writes would still commit | Rollback-only: the commit fails, and nothing is written |
+| Kind of transaction | Interactive SQL (Drizzle `db.transaction`) | DynamoDB write batch, staged until commit |
+| Reads see the transaction's own writes | Yes | No |
+| Testing | Set up the ALS context or mock modules | Pass a fake `tx` and fake ports in `ctx` |
+| Context leaks | Detached async work or `enterWith()` can carry or lose the transaction | None; it only goes where it is passed |
+
+Why option 3 does not use ALS for transactions:
+
+1. **Transactions are business logic.** With ALS, the repository looks for a transaction, so it
+   takes part in the decision. Here, a repository only receives one.
+2. **Failures are loud, not silent.** A missing `provideTransaction()` gives non-atomic writes and no
+   error. A missing `useTransaction()` does not compile.
+3. **The article's argument against explicit passing does not apply here.** Its "before" version
+   threads `tx` through every function by hand. Use cases here already take an explicit `ctx` for
+   their dependencies, so `tx` rides along at no extra cost.
+4. **DynamoDB makes ambient state riskier.** With an interactive SQL transaction, every query inside
+   joins it, reads included. A DynamoDB transaction is a batch of staged writes. Making it explicit at
+   least shows which writes belong to it.
+
+**This repo does use ALS, for logging.** `runWithContext()` (`context.ts`) carries the request's
+logger, with `requestId` (or the `aws` and `sqs` fields in the Lambda), into all common code. Logging
+is cross-cutting, and invisible propagation is the point there. A missing context only means fewer
+log fields, never a broken invariant. Transactions are the opposite case, so they are explicit.
+
+ALS is the better tool for transactions when you do not control the call chain (legacy or third-party
+code calling your repositories), or when you are on SQL with interactive transactions and repositories
+are used both inside and outside them.
+
 ### Further reading
 
 - Martin Fowler, *Patterns of Enterprise Application Architecture* (2002): Unit of Work, Repository,
@@ -419,8 +485,167 @@ use case owns the boundary, and only the repository knows DynamoDB.
   work owned by the service layer. <https://www.cosmicpython.com/book/chapter_06_uow.html>
 - Vaughn Vernon, *Effective Aggregate Design* (2011), and Pat Helland, *Life beyond Distributed
   Transactions* (2007): one aggregate per transaction.
-- Chris Richardson, Transactional Outbox. <https://microservices.io/patterns/data/transactional-outbox.html>
+- Transactions and logging through AsyncLocalStorage in Node.js (wempe.dev).
+  <https://wempe.dev/blog/nodejs-async-local-storage-context>
+- Chris Richardson, Transactional Outbox (option B under Messaging). <https://microservices.io/patterns/data/transactional-outbox.html>
 - Alex DeBrie, *The DynamoDB Book*: transactions, condition expressions, uniqueness-guard items.
+
+## Messaging and transactions (design, not implemented)
+
+Next to DynamoDB, the second kind of persistent I/O a real service does is sending messages, for
+example to SQS. This section designs that, with no code yet, to show how messaging fits the
+transaction model above.
+
+**The problem is a dual write.** A use case that updates a todo *and* announces it (`todo.completed`)
+writes to two systems. SQS cannot join a DynamoDB transaction, so the two writes cannot be atomic as
+they stand. Every design has to choose what happens when one succeeds and the other does not.
+
+### The port
+
+Use cases should not know how a message is delivered, so messaging is a port like the repositories:
+
+```ts
+// repositories/messaging.ts (port)
+export interface Message {
+  /** Unique per message; consumers deduplicate by it. */
+  id: string;
+  type: 'todo.completed' | 'project.created';
+  payload: unknown;
+}
+
+export interface MessagingService {
+  /** Sends `message` if, and only if, `tx` commits. */
+  publish(tx: Transaction, message: Message): void;
+}
+
+// features/todos/updateTodo.ts
+ctx.todoRepository.replace(ctx.tx, todo, current.updatedAt);
+if (todo.done && !current.done) ctx.messaging.publish(ctx.tx, todoCompleted(todo));
+```
+
+`publish` takes `tx` like a repository write. This puts "send only if the commit succeeds" in the
+signature, and the use case declares `{ messaging: MessagingService }` in its `Deps` like any other
+port. The two options below are two adapters behind this same port. The use case does not change
+between them.
+
+**Not an option: sending before or during the transaction.** If the transaction then fails (a 409, or
+a rollback-only commit), the message announces something that never happened, and consumers act on
+it. Both options send only after a successful commit.
+
+### Option A: send after commit
+
+The adapter registers an `afterCommit` hook that calls SQS `SendMessage`.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant UC as use case
+    participant Tx as DynamoTransaction
+    participant DB as DynamoDB
+    participant Q as SQS
+    UC->>Tx: todoRepository.replace(tx, todo)
+    UC->>Tx: messaging.publish(tx, msg) (registers afterCommit hook)
+    UC->>Tx: commit()
+    Tx->>DB: TransactWriteItems [todo]
+    DB-->>Tx: ok
+    Tx->>Q: SendMessage(msg) (afterCommit)
+    Note over Tx,Q: crash or SQS error here: committed, message lost
+    Q-->>Tx: ok
+```
+
+- **Guarantee: at most once.** Never sent when the commit fails. *Lost* if the process dies, the
+  Lambda times out, or SQS errors between the commit and the send.
+- **Pros:** no extra infrastructure, immediate delivery, and the DynamoDB transaction stays as it is,
+  with no extra write.
+- **Cons:**
+  - It only half keeps the `Transaction` contract (all or nothing): the write can commit while its
+    message is lost.
+  - `commit()` awaits async `afterCommit` hooks, so the request waits for the send and a failure is
+    logged. It is still not reported to the caller, because the writes are already committed.
+  - Retrying inside the process only narrows the gap; a crash still loses the message.
+- **Fits:** notifications where losing one now and then is acceptable, such as cache invalidation,
+  "nice to have" emails, or metrics.
+
+### Option B: transactional outbox
+
+The adapter stages an outbox item in the **same DynamoDB transaction** as the business writes. A relay
+reads committed outbox items from DynamoDB Streams and sends them to SQS.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant UC as use case
+    participant Tx as DynamoTransaction
+    participant DB as DynamoDB (todos + outbox)
+    participant S as DynamoDB Streams
+    participant R as relay Lambda
+    participant Q as SQS
+    UC->>Tx: todoRepository.replace(tx, todo)
+    UC->>Tx: messaging.publish(tx, msg) (stages outbox item msg.id)
+    UC->>Tx: commit()
+    Tx->>DB: TransactWriteItems [todo, outbox item]
+    DB-->>Tx: ok (both or neither)
+    DB--)S: INSERT outbox item msg.id
+    S--)R: stream batch
+    R->>Q: SendMessageBatch
+    Note over R,Q: failure: batchItemFailures, stream retries
+    Q-->>R: ok
+    Note over DB: outbox item expires through TTL
+```
+
+- **Guarantee: at least once.** The message exists if and only if the commit succeeded. If the relay
+  crashes, the stream redelivers; if SQS is down, the relay retries.
+- **Pros:**
+  - It keeps the `Transaction` contract fully, because the outbox item is just another staged write.
+  - Composition works unchanged: a joined use case's messages commit or roll back with the outermost
+    transaction, rollback-only included.
+- **Cons:**
+  - More infrastructure: an outbox table with a stream and TTL, and a relay Lambda.
+  - Delivery is delayed (by stream lag, typically under a second).
+  - **Duplicates:** a relay retry can resend, so consumers must deduplicate on `message.id`, for
+    example with a conditional put of a guard item. The same fix covers SQS redelivery in
+    `sqsHandler`.
+  - Each message is one more write in the transaction. It counts toward the 100-write limit, and a
+    use case with a single business write no longer gets the plain-Put fast path, so its write cost
+    doubles.
+  - Ordering follows the stream, per item. Strict ordering needs a FIFO queue and a
+    `MessageGroupId`, such as the todo ID.
+- **Fits:** anything another service *acts on*: domain events, commands, integrations.
+
+### Side by side
+
+| | A: after commit | B: outbox |
+|---|---|---|
+| Commit fails | not sent ✓ | not sent ✓ |
+| Crash between commit and send | **lost** ✗ | relayed later ✓ |
+| SQS unavailable | lost, or retried in process until the process ends | retried by the relay ✓ |
+| Delivery | at most once | at least once (consumers deduplicate) |
+| Keeps the `Transaction` contract | only half (no phantom messages, but losses) | fully |
+| Latency | immediate | stream lag |
+| DynamoDB transaction | unchanged | +1 write per message (100-write limit, no single-write fast path) |
+| Infrastructure | SQS client | outbox table + stream + TTL, relay Lambda, SQS client |
+
+**Variant of B: change data capture.** Run the stream on the `todos` table itself, and derive events
+from item changes (old image vs new image) in the relay. This needs no outbox writes and no extra cost
+in the transaction. But messages are inferred from storage changes rather than stated by the use case,
+so the business intent ("completed", not just "`done` flipped") lives in the relay instead of in
+`features/`.
+
+### Where it would live
+
+```
+repositories/messaging.ts            port: Message, MessagingService
+integrations/sqs/                    SQS client; option A adapter (afterCommit → SendMessage)
+integrations/dynamo/outbox.ts        option B adapter: stages the outbox item via DynamoTransaction.of(tx)
+apps/lambda/src/handlers/relay.ts    option B relay: Streams → SQS, built on lambdaHandler()
+```
+
+`integrations-independent` keeps the SQS and DynamoDB adapters apart. The relay is an app, so it may
+combine both. The container chooses the adapter, and use cases see only `MessagingService`.
+
+**Recommendation:** option B for domain events, because it is the only adapter that keeps the
+transaction's all-or-nothing contract. Use option A only for messages where loss is acceptable. Both
+can coexist, as two ports, or one port with a per-message choice, since the use case code is the same.
 
 ## Adding a use case or feature
 

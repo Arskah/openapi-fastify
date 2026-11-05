@@ -20,8 +20,14 @@
  * anything else.
  */
 export interface Transaction {
-  /** Runs `fn` once this transaction has committed; skipped if it fails. */
-  afterCommit(fn: () => void): void;
+  /**
+   * Runs `fn` once this transaction has committed; skipped if it fails. The
+   * commit awaits the hooks one after another, in the order they were added, so
+   * the use case returns only after its side effects ran. A hook that throws or
+   * rejects is logged, not rethrown: the writes are already committed, and
+   * failing the use case would invite a retry of writes that happened.
+   */
+  afterCommit(fn: () => void | Promise<void>): void;
   /** Makes the commit fail with `cause`; for a joined part that failed. */
   rollbackOnly(cause: unknown): void;
 }

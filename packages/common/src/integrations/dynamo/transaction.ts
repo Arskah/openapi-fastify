@@ -21,7 +21,7 @@ export class DynamoTransaction implements RootTransaction {
   readonly #dynamo: DynamoClient;
   readonly #log: Logger;
   readonly #writes: Write[] = [];
-  readonly #hooks: (() => void)[] = [];
+  readonly #hooks: (() => void | Promise<void>)[] = [];
   #committed = false;
   #failure: { cause: unknown } | undefined;
 
@@ -42,7 +42,7 @@ export class DynamoTransaction implements RootTransaction {
     this.#writes.push(write);
   }
 
-  afterCommit(fn: () => void): void {
+  afterCommit(fn: () => void | Promise<void>): void {
     this.#assertOpen('afterCommit');
     this.#hooks.push(fn);
   }
@@ -51,7 +51,7 @@ export class DynamoTransaction implements RootTransaction {
     this.#failure ??= { cause };
   }
 
-  /** Commits the staged writes atomically, then runs the `afterCommit` hooks. */
+  /** Commits the staged writes atomically, then awaits the `afterCommit` hooks in order. */
   async commit(): Promise<void> {
     this.#assertOpen('commit');
     this.#committed = true;
@@ -64,7 +64,7 @@ export class DynamoTransaction implements RootTransaction {
     }
     for (const hook of this.#hooks) {
       try {
-        hook();
+        await hook();
       } catch (error) {
         // The writes are committed; a failing side effect must not report the use case as failed
         this.#log.error({ err: error }, 'afterCommit hook failed');
