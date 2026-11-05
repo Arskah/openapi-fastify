@@ -1,5 +1,5 @@
 import { newTodo, type CreateTodoInput, type Todo } from '../../domain/todo.ts';
-import type { TodoRepository } from '../../repositories/todo.repository.ts';
+import type { TodoRepository } from '../../ports/todo.repository.ts';
 import { useTransaction, type Transactional, type TransactionDeps } from '../transaction.ts';
 import { useCase, type UseCaseContext } from '../use-case.ts';
 

@@ -1,7 +1,7 @@
 import { BatchGetCommand, type BatchGetCommandOutput, GetCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
 import type { Todo } from '../../domain/todo.ts';
 import { ConflictError, NotFoundError, ValidationError } from '../../errors.ts';
-import type { TodoRepository } from '../../repositories/todo.repository.ts';
+import type { TodoRepository } from '../../ports/todo.repository.ts';
 import type { RepositoryDeps } from './deps.ts';
 import { todosTable } from './tables/todos.ts';
 import { DynamoTransaction } from './transaction.ts';

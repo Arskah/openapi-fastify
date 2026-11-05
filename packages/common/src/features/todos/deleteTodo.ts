@@ -1,4 +1,4 @@
-import type { TodoRepository } from '../../repositories/todo.repository.ts';
+import type { TodoRepository } from '../../ports/todo.repository.ts';
 import { detachTodoFromProject, type DetachTodoFromProjectDeps } from '../projects/detachTodoFromProject.ts';
 import { useTransaction, type Transactional } from '../transaction.ts';
 import { useCase } from '../use-case.ts';

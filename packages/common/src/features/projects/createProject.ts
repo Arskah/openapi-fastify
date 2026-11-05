@@ -1,5 +1,5 @@
 import { newProject, withTodos } from '../../domain/project.ts';
-import type { ProjectRepository } from '../../repositories/project.repository.ts';
+import type { ProjectRepository } from '../../ports/project.repository.ts';
 import { createTodo, type CreateTodoDeps } from '../todos/createTodo.ts';
 import { useTransaction, type Transactional } from '../transaction.ts';
 import { useCase } from '../use-case.ts';

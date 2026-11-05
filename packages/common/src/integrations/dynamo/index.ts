@@ -1,4 +1,4 @@
-import type { RootTransaction } from '../../repositories/transaction.ts';
+import type { RootTransaction } from '../../ports/transaction.ts';
 import type { RepositoryDeps } from './deps.ts';
 import { createProjectRepository } from './project.repository.ts';
 import { createTodoRepository } from './todo.repository.ts';

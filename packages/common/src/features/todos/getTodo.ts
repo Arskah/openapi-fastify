@@ -1,6 +1,6 @@
 import type { Todo } from '../../domain/todo.ts';
 import { NotFoundError } from '../../errors.ts';
-import type { TodoRepository } from '../../repositories/todo.repository.ts';
+import type { TodoRepository } from '../../ports/todo.repository.ts';
 import { useCase, type UseCaseContext } from '../use-case.ts';
 
 export type GetTodoDeps = UseCaseContext & { todoRepository: TodoRepository };

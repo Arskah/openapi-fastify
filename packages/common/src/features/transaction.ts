@@ -1,4 +1,4 @@
-import type { RootTransaction, Transaction } from '../repositories/transaction.ts';
+import type { RootTransaction, Transaction } from '../ports/transaction.ts';
 
 /** What a transactional use case needs besides its repositories. */
 export interface TransactionDeps {

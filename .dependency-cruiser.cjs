@@ -1,5 +1,5 @@
 // Layering rules for packages/common:
-//   domain ← repositories (ports) ← integrations (adapters) ← container ← features (use cases)
+//   domain ← ports ← integrations (adapters) ← container ← features (use cases)
 // Use cases depend on ports, never on an integration.
 const src = '^packages/common/src';
 
@@ -17,19 +17,19 @@ module.exports = {
       comment: 'Domain types and rules must not know about storage, use cases or wiring.',
       severity: 'error',
       from: { path: `${src}/domain/` },
-      to: { path: `${src}/(repositories|integrations|features|container|context)` },
+      to: { path: `${src}/(ports|integrations|features|container|context)` },
     },
     {
       name: 'ports-are-abstract',
-      comment: 'repositories/ holds interfaces only: no integration, wiring or use case behind them.',
+      comment: 'ports/ holds interfaces only: no integration, wiring or use case behind them.',
       severity: 'error',
-      from: { path: `${src}/repositories/` },
+      from: { path: `${src}/ports/` },
       to: { path: `${src}/(integrations|features|container)` },
     },
     {
       name: 'features-use-ports',
       comment:
-        'Use cases depend on repositories/ (ports), never on an integration. Storage ops, clients and tables stay behind the port, so a use case cannot stage raw writes.',
+        'Use cases depend on ports/, never on an integration. Storage ops, clients and tables stay behind the port, so a use case cannot stage raw writes.',
       severity: 'error',
       from: { path: `${src}/features/` },
       to: { path: `${src}/integrations/` },
@@ -86,7 +86,7 @@ module.exports = {
       name: 'container-is-infrastructure',
       comment: 'The container, ports and integrations never import use cases.',
       severity: 'error',
-      from: { path: `${src}/(container|repositories/|integrations/)` },
+      from: { path: `${src}/(container|ports/|integrations/)` },
       to: { path: `${src}/features/` },
     },
   ],

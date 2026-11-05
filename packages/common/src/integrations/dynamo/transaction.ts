@@ -1,6 +1,6 @@
 import type { Logger } from '../../logger.ts';
 import type { DynamoClient } from './client.ts';
-import type { RootTransaction, Transaction } from '../../repositories/transaction.ts';
+import type { RootTransaction, Transaction } from '../../ports/transaction.ts';
 import { MAX_WRITES, type Write } from './write.ts';
 
 /**

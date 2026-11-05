@@ -5,7 +5,7 @@ generated from that spec, and business logic in a shared package wired through a
 dependency container. The server and an SQS Lambda both consume that package.
 
 ```
-packages/common      business logic, no HTTP: domain/, repositories/ (ports), integrations/ (DynamoDB), features/ (use cases), container
+packages/common      business logic, no HTTP: domain/, ports/, integrations/ (DynamoDB), features/ (use cases), container
 packages/api-client  @hey-api/openapi-ts fetch client generated from apps/server/openapi.json, request-ID helpers
 apps/server          Fastify 5 + fastify-type-provider-zod + @fastify/swagger, pino with request IDs
 apps/cli             Stricli CLI over @demo/api-client
@@ -98,7 +98,7 @@ whose type parameter keeps the extended config typed on `container.config`.
 ```
 packages/common/src/
   domain/              ids.ts, todo.ts, project.ts: branded entities + rules (newTodo, applyTodoUpdate, newProject, withTodos)
-  repositories/        ports: what use cases depend on (interfaces only)
+  ports/               what use cases depend on (interfaces only)
     todo.repository.ts, project.repository.ts
     transaction.ts     Transaction (afterCommit, rollbackOnly) and RootTransaction (+ commit)
   integrations/        adapters: one directory per external system
@@ -116,7 +116,7 @@ packages/common/src/
 ```
 
 This is ports and adapters (hexagonal architecture). Use cases depend on the interfaces in
-`repositories/`. `integrations/` implements them, one directory per external system, and the container
+`ports/`. `integrations/` implements them, one directory per external system, and the container
 wires them together. Another backend, for example a repository backed by an HTTP API in
 `integrations/http/`, implements the same port without any change to the use cases. One caveat: an HTTP
 API has no transactions. Its write methods would not take `tx`, and would run immediately or from
@@ -128,7 +128,7 @@ input schemas, and each feature's use cases and schemas (from the feature's `ind
 functions, ports, `useCase`/`useTransaction`, `Deps` types and the DynamoDB integration stay
 internal, so an app cannot bypass a use case or write to DynamoDB directly.
 
-Imports point one way, `features → repositories ← integrations`, with `container` wiring them together and
+Imports point one way, `features → ports ← integrations`, with `container` wiring them together and
 `domain` innermost. `pnpm lint:deps` (dependency-cruiser, `.dependency-cruiser.cjs`) enforces it:
 
 | Rule                                                                       | Why                                                                                                                                                            |
@@ -137,7 +137,7 @@ Imports point one way, `features → repositories ← integrations`, with `conta
 | `no-cross-feature-barrels`                                                 | Import `../todos/createTodo.ts`, not `../todos/index.ts`. A barrel drags in the whole feature, which turns an acyclic graph of use cases into cyclic features. |
 | `features-without-container`                                               | Use cases name ports in their `Deps`, never `Pick<Container, …>`, so they cannot ask for the DynamoDB client or anything else the container holds.             |
 | `features-use-ports`                                                       | Use cases import ports, never `integrations/`. Storage ops, clients and tables stay behind the port, so a use case cannot stage raw DynamoDB writes.           |
-| `ports-are-abstract`                                                       | `repositories/` depends on nothing but `domain/`.                                                                                                              |
+| `ports-are-abstract`                                                       | `ports/` depends on nothing but `domain/`.                                                                                                                     |
 | `integrations-independent`                                                 | Each integration stands alone; the container combines them.                                                                                                    |
 | `repositories-independent`                                                 | Repository implementations never use each other; atomicity comes from the use case's transaction.                                                              |
 | `container-is-infrastructure`                                              | The container, ports and integrations never import use cases.                                                                                                  |
@@ -229,7 +229,7 @@ itself. With one file per use case, the graph is just `createProject → createT
   get a spurious 409. The data stays correct, because the condition catches it; a retry succeeds.
 
 The contract every implementation must keep (deferred writes, all-or-nothing commit, preconditions
-checked on commit) is written down on the port in `repositories/transaction.ts`. A second integration
+checked on commit) is written down on the port in `ports/transaction.ts`. A second integration
 implements that, not the DynamoDB behaviour.
 
 **Data model.** The todo–project relationship is stored twice: `todo.projectId` and
@@ -289,7 +289,7 @@ export const getTodo = useCase('getTodo', async (ctx: GetTodoDeps, id: string) =
 ```
 
 The unit of work is an implementation detail of the transaction. Use cases and repositories only see
-the `Transaction` port (`repositories/transaction.ts`): `afterCommit` and `rollbackOnly`. Nothing in
+the `Transaction` port (`ports/transaction.ts`): `afterCommit` and `rollbackOnly`. Nothing in
 the port is DynamoDB-specific. Behind it, `DynamoTransaction` (`integrations/dynamo/transaction.ts`)
 collects the writes that the DynamoDB repositories stage, via `DynamoTransaction.of(tx)`, which rejects any
 other kind of transaction. It submits them in one call through
@@ -578,7 +578,7 @@ they stand. Every design has to choose what happens when one succeeds and the ot
 Use cases should not know how a message is delivered, so messaging is a port like the repositories:
 
 ```ts
-// repositories/messaging.ts (port)
+// ports/messaging.ts
 export interface Message {
   /** Unique per message; consumers deduplicate by it. */
   id: string;
@@ -707,7 +707,7 @@ so the business intent ("completed", not just "`done` flipped") lives in the rel
 ### Where it would live
 
 ```
-repositories/messaging.ts            port: Message, MessagingService
+ports/messaging.ts                   port: Message, MessagingService
 integrations/sqs/                    SQS client; option A adapter (afterCommit → SendMessage)
 integrations/dynamo/outbox.ts        option B adapter: stages the outbox item via DynamoTransaction.of(tx)
 apps/lambda/src/handlers/relay.ts    option B relay: Streams → SQS, built on lambdaHandler()
@@ -722,7 +722,7 @@ can coexist, as two ports, or one port with a per-message choice, since the use 
 
 ## Adding a use case or feature
 
-1. Entities and rules → `domain/`. The port → `repositories/`. Storage → `integrations/dynamo/tables/` +
+1. Entities and rules → `domain/`. The port → `ports/`. Storage → `integrations/dynamo/tables/` +
    `tables/index.ts`, the implementation, `dynamoModule`, and the table name in `config.ts`
 2. `features/<feature>/<useCase>.ts`. Wrap it in `useTransaction()` if it writes
 3. If apps call it, add it to the feature's `index.ts`, which lists the feature's public API

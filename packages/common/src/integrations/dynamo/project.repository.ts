@@ -1,6 +1,6 @@
 import { GetCommand } from '@aws-sdk/lib-dynamodb';
 import { ConflictError, NotFoundError } from '../../errors.ts';
-import type { ProjectRepository } from '../../repositories/project.repository.ts';
+import type { ProjectRepository } from '../../ports/project.repository.ts';
 import type { RepositoryDeps } from './deps.ts';
 import { projectsTable } from './tables/projects.ts';
 import { DynamoTransaction } from './transaction.ts';

@@ -1,4 +1,4 @@
-import type { ProjectRepository } from '../../repositories/project.repository.ts';
+import type { ProjectRepository } from '../../ports/project.repository.ts';
 import { useTransaction, type Transactional, type TransactionDeps } from '../transaction.ts';
 import { useCase, type UseCaseContext } from '../use-case.ts';
 
