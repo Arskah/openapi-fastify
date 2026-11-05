@@ -6,8 +6,10 @@
 export { CommonConfigSchema, commonConfigFromEnv, loadCommonConfig, type CommonConfig } from './config.ts';
 export { createContainer, type Container, type ContainerOptions } from './container.ts';
 export { featureFlagsFromEnv, startFeatureFlags, type FeatureFlagsOptions } from './feature-flags.ts';
+export { localSecretStore } from './integrations/local-secrets/index.ts';
 export { staticFeatureFlags, type StaticFlags } from './integrations/static-flags/index.ts';
 export type { FeatureFlagProvider, FeatureFlags, FlagSubject, FlagValues, Gate } from './ports/feature-flags.ts';
+export type { SecretStore } from './ports/secrets.ts';
 export { runWithContext, type RequestContext } from './context.ts';
 export type { Logger, LogFn } from './logger.ts';
 

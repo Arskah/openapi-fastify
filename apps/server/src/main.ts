@@ -1,12 +1,14 @@
-import { createContainer, featureFlagsFromEnv, startFeatureFlags } from '@demo/common';
+import { createContainer, featureFlagsFromEnv, localSecretStore, startFeatureFlags } from '@demo/common';
 import { buildApp } from './app.ts';
 import { loadConfig } from './config.ts';
 import { createLogger } from './logger.ts';
 
 const config = loadConfig();
 const logger = createLogger(config);
-// Async startup happens here, before wiring: once the provider resolves, flag checks are synchronous
-const featureFlags = await startFeatureFlags({ ...featureFlagsFromEnv(process.env), logger });
+// Async startup happens here, before wiring: once the provider resolves, flag checks are synchronous.
+// The demo's secret store is a local file; in AWS it would be Secrets Manager behind the same port.
+const secrets = localSecretStore(process.env.SECRETS_FILE);
+const featureFlags = await startFeatureFlags({ ...featureFlagsFromEnv(process.env), secrets, logger });
 const container = createContainer({ config, logger, featureFlags });
 const app = await buildApp({ logger, container });
 

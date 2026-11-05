@@ -18,6 +18,7 @@ apps/lambda          SQS-triggered Lambda that creates todos through @demo/commo
 mise install            # node + pnpm versions from mise.toml
 pnpm install
 cp .env.example .env
+cp .secrets.example.json .secrets.json   # optional: a Statsig key, see Feature flags
 pnpm dev                # DynamoDB Local on :8000 + todos table + API on :3000 (watch), Swagger UI on /docs
 
 pnpm -s cli todos add "Buy milk"
@@ -106,6 +107,7 @@ packages/common/src/
     todo.repository.ts, project.repository.ts
     transaction.ts     Transaction (afterCommit, rollbackOnly) and RootTransaction (+ commit)
     feature-flags.ts   FeatureFlags (isEnabled, value), Gate / FlagValues + defaults, FeatureFlagProvider
+    secrets.ts         SecretStore (get by secret ID): for startup code, never for use cases
   integrations/        adapters: one directory per external system
     dynamo/
       client.ts        DynamoClient: send() for reads, writeAtomically() (failed condition → the writer's error)
@@ -115,8 +117,9 @@ packages/common/src/
       *.repository.ts  implement the ports; reads run immediately, writes stage into the transaction
     statsig/           FeatureFlagProvider on the Statsig server SDK
     static-flags/      FeatureFlagProvider with fixed flags (tests, no Statsig key)
+    local-secrets/     SecretStore on a local JSON file, standing in for AWS Secrets Manager
   container.ts         infrastructure only: config, logger, dynamo, feature flags, repositories, beginTransaction
-  feature-flags.ts     startFeatureFlags(): Statsig when a key is set, static flags otherwise
+  feature-flags.ts     startFeatureFlags(): fetches the Statsig key, then Statsig, or static flags without one
   features/
     use-case.ts        useCase() helper
     transaction.ts     useTransaction(): declares a use case transactional
@@ -151,6 +154,7 @@ Imports point one way, `features → ports ← integrations`, with `container` w
 | `repositories-independent`                                                 | Repository implementations never use each other; atomicity comes from the use case's transaction.                                                              |
 | `container-is-infrastructure`                                              | The container, flag provider wiring, ports and integrations never import use cases.                                                                            |
 | `vendor-sdks-in-their-integration`                                         | Only `integrations/statsig/` imports the Statsig SDK, so a use case never handles a `StatsigUser`.                                                             |
+| `features-without-secrets`                                                 | Use cases cannot import the `SecretStore` port: secrets are fetched at startup and handed to the integration that needs them.                                  |
 | `tables-without-io`, `domain-is-innermost`, `integrations-below-container` | Keep the direction one-way.                                                                                                                                    |
 
 ## Use cases
@@ -786,7 +790,8 @@ see rules up to the age of the freeze, until the next sync. The static provider 
 
 ```ts
 // apps/server/src/main.ts
-const featureFlags = await startFeatureFlags({ ...featureFlagsFromEnv(process.env), logger });
+const secrets = localSecretStore(process.env.SECRETS_FILE); // in AWS: Secrets Manager behind the same port
+const featureFlags = await startFeatureFlags({ ...featureFlagsFromEnv(process.env), secrets, logger });
 const container = createContainer({ config, logger, featureFlags });
 const app = await buildApp({ logger, container });
 app.addHook('onClose', async () => {
@@ -796,10 +801,17 @@ app.addHook('onClose', async () => {
 ```
 
 The Lambda does the same on the cold start (`getRuntime()` caches the promise and resets it on
-failure) and flushes per invocation. `STATSIG_SERVER_SECRET` is read from the environment and goes
-to the provider only, never into `CommonConfig`, because the container's config is visible to use
-cases. With async configuration (e.g. Secrets Manager), the secret is fetched in the same place,
-before `startFeatureFlags`.
+failure) and flushes per invocation.
+
+**The Statsig key is a secret, fetched asynchronously.** The environment holds only its ID
+(`STATSIG_SECRET_ID`); `startFeatureFlags` fetches the key from a `SecretStore` (`ports/secrets.ts`)
+and hands it to Statsig alone. The key is never in `CommonConfig`, because the container's config is
+visible to use cases, and the `features-without-secrets` rule keeps use cases from fetching secrets
+themselves. In AWS the store would be Secrets Manager (`GetSecretValue` by secret ID, with the
+function's IAM role); the demo has no local Secrets Manager, so `localSecretStore` reads
+`.secrets.json` (gitignored, see `.secrets.example.json`) with the same IDs and the same async shape.
+Its JSON parse errors name the file but never quote it, since the file content is secrets. Fetching
+at startup means a rotated key applies on the next start (a new Lambda sandbox, a server restart).
 
 **The call site decides the subject.** Flags are one process-wide provider in the container, like the
 repositories. Each check passes a subject when it has one and omits it for a global check:
@@ -818,6 +830,8 @@ AsyncLocalStorage, for the same reason transactions are explicit. Today no use c
 
 **Failure modes.**
 
+- **Key secret missing or the store unreachable:** logged as a warning, then the same as below. A
+  missing `STATSIG_SECRET_ID` is the normal local setup and only logs at info.
 - **Statsig unreachable or key invalid at startup:** `initialize()` reports failure, the adapter logs a
   warning, and every gate is off with default values. The app starts: a flag provider outage must not
   take the service down. Gates are therefore written so that off means the old behaviour.

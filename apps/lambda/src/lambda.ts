@@ -1,4 +1,11 @@
-import { createContainer, featureFlagsFromEnv, runWithContext, startFeatureFlags, type Container } from '@demo/common';
+import {
+  createContainer,
+  featureFlagsFromEnv,
+  localSecretStore,
+  runWithContext,
+  startFeatureFlags,
+  type Container,
+} from '@demo/common';
 import type { Context, Handler } from 'aws-lambda';
 import type { Logger } from 'pino';
 import { loadConfig, type LambdaConfig } from './config.ts';
@@ -25,7 +32,9 @@ let coldStart = true;
 async function startRuntime(): Promise<Runtime> {
   const config = loadConfig();
   const logger = createLogger(config);
-  const featureFlags = await startFeatureFlags({ ...featureFlagsFromEnv(process.env), logger });
+  // The demo's secret store is a local file; in AWS it would be Secrets Manager behind the same port
+  const secrets = localSecretStore(process.env.SECRETS_FILE);
+  const featureFlags = await startFeatureFlags({ ...featureFlagsFromEnv(process.env), secrets, logger });
   return { container: createContainer({ config, logger, featureFlags }), logger };
 }
 

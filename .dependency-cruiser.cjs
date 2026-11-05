@@ -75,6 +75,14 @@ module.exports = {
       },
     },
     {
+      name: 'features-without-secrets',
+      comment:
+        'Secrets are fetched at startup and handed to the integration that needs them. A use case that could fetch one would hold credentials the port is there to hide.',
+      severity: 'error',
+      from: { path: `${src}/features/` },
+      to: { path: `${src}/ports/secrets\\.ts$` },
+    },
+    {
       name: 'vendor-sdks-in-their-integration',
       comment:
         'Only integrations/statsig/ sees the Statsig SDK. Use cases check flags through the FeatureFlags port, already bound to a subject, so they never handle a StatsigUser.',
