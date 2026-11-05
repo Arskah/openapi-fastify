@@ -2,10 +2,10 @@
   "name": "@demo/cli",
   "version": "0.0.0",
   "private": true,
-  "type": "module",
   "bin": {
     "demo": "./src/main.ts"
   },
+  "type": "module",
   "scripts": {
     "start": "node src/main.ts"
   },

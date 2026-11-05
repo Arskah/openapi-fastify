@@ -20,10 +20,7 @@ import { ErrorResponseSchema } from '../errors.ts';
 const IdParams = z.object({ id: TodoIdSchema });
 const tags = ['todos'];
 
-export const todoRoutes: FastifyPluginAsyncZod<{ container: Container<ServerConfig> }> = async (
-  app,
-  { container },
-) => {
+export const todoRoutes: FastifyPluginAsyncZod<{ container: Container<ServerConfig> }> = async (app, { container }) => {
   app.get(
     '/todos',
     {

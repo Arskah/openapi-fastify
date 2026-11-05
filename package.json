@@ -2,10 +2,6 @@
   "name": "openapi-fastify",
   "private": true,
   "type": "module",
-  "packageManager": "pnpm@12.16.1",
-  "engines": {
-    "node": ">=26.13.0"
-  },
   "scripts": {
     "dev": "pnpm db:up && pnpm db:init && pnpm dev:server",
     "dev:server": "pnpm --filter @demo/server dev",
@@ -16,11 +12,21 @@
     "lambda:invoke": "pnpm --filter @demo/lambda --silent invoke",
     "typecheck": "tsc -p packages/common && tsc -p packages/api-client && tsc -p apps/server && tsc -p apps/cli && tsc -p apps/lambda",
     "lint:deps": "depcruise packages/common/src --config .dependency-cruiser.cjs",
-    "check": "pnpm typecheck && pnpm lint:deps"
+    "fmt": "oxfmt",
+    "fmt:check": "oxfmt --check",
+    "lint": "oxlint --type-aware --deny-warnings",
+    "check": "pnpm fmt:check && pnpm lint && pnpm typecheck && pnpm lint:deps"
   },
   "devDependencies": {
     "@types/node": "26.6.6",
     "dependency-cruiser": "18.7.0",
+    "oxfmt": "0.75.0",
+    "oxlint": "1.90.0",
+    "oxlint-tsgolint": "7.0.2005",
     "typescript": "7.0.2"
-  }
+  },
+  "engines": {
+    "node": ">=26.13.0"
+  },
+  "packageManager": "pnpm@12.16.1"
 }

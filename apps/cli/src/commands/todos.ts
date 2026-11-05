@@ -86,7 +86,9 @@ const update = buildCommand({
   func(flags: ApiFlags & { title?: string; description?: string; done?: boolean }, id: string) {
     return withApi(flags, async (api) => {
       const { title, description, done } = flags;
-      printJson(await unwrap(api, updateTodo({ client: api.client, path: { id }, body: { title, description, done } })));
+      printJson(
+        await unwrap(api, updateTodo({ client: api.client, path: { id }, body: { title, description, done } })),
+      );
     });
   },
 });

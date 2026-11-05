@@ -77,7 +77,7 @@ module.exports = {
     {
       name: 'no-cross-feature-barrels',
       comment:
-        'Use cases import other features\' use-case files directly. Barrels pull in a whole feature and turn file-level DAGs into feature-level cycles.',
+        "Use cases import other features' use-case files directly. Barrels pull in a whole feature and turn file-level DAGs into feature-level cycles.",
       severity: 'error',
       from: { path: `${src}/features/([^/]+)/` },
       to: { path: `${src}/features/[^/]+/index\\.ts$`, pathNot: `${src}/features/$1/` },

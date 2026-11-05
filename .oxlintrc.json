@@ -1,0 +1,25 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "unicorn", "oxc", "import", "node", "promise"],
+  "categories": {
+    "correctness": "error",
+    "suspicious": "warn"
+  },
+  "rules": {
+    "no-unused-vars": ["error", { "ignoreRestSiblings": true }],
+    "no-underscore-dangle": ["warn", { "allow": ["_X_AMZN_TRACE_ID"] }],
+    "typescript/no-floating-promises": "error",
+    "typescript/no-misused-promises": "error",
+    "typescript/await-thenable": "error"
+  },
+  "overrides": [
+    {
+      "files": ["apps/lambda/scripts/**"],
+      "rules": {
+        // Local invoke builds partial fake AWS events and contexts on purpose
+        "typescript/no-unsafe-type-assertion": "off"
+      }
+    }
+  ],
+  "ignorePatterns": ["packages/api-client/src/client/**"]
+}

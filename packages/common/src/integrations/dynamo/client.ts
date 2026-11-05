@@ -1,4 +1,8 @@
-import { ConditionalCheckFailedException, DynamoDBClient, TransactionCanceledException } from '@aws-sdk/client-dynamodb';
+import {
+  ConditionalCheckFailedException,
+  DynamoDBClient,
+  TransactionCanceledException,
+} from '@aws-sdk/client-dynamodb';
 import {
   DeleteCommand,
   DynamoDBDocumentClient,
@@ -24,8 +28,7 @@ export class DynamoClient {
     this.#doc = DynamoDBDocumentClient.from(client, {
       marshallOptions: { removeUndefinedValues: true },
     });
-    // bind() would collapse send's overloads to the last one
-    this.send = this.#doc.send.bind(this.#doc) as DynamoDBDocumentClient['send'];
+    this.send = this.#doc.send.bind(this.#doc);
   }
 
   /**

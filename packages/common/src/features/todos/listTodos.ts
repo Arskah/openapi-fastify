@@ -4,7 +4,6 @@ import type { ListTodosQuery, TodoList } from './todo.schema.ts';
 
 export type ListTodosDeps = UseCaseContext & { todoRepository: TodoRepository };
 
-export const listTodos = useCase(
-  'listTodos',
-  async (ctx: ListTodosDeps, query: ListTodosQuery): Promise<TodoList> => ctx.todoRepository.list(query),
+export const listTodos = useCase('listTodos', async (ctx: ListTodosDeps, query: ListTodosQuery): Promise<TodoList> =>
+  ctx.todoRepository.list(query),
 );

@@ -34,8 +34,6 @@ export const transformObject: SwaggerTransformObject = (input) => {
   };
   visit((document as { paths?: unknown }).paths);
 
-  document.components!.schemas = Object.fromEntries(
-    Object.entries(schemas).filter(([name]) => used.has(name)),
-  );
+  document.components!.schemas = Object.fromEntries(Object.entries(schemas).filter(([name]) => used.has(name)));
   return document;
 };

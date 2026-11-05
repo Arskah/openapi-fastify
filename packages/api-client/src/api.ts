@@ -64,9 +64,21 @@ export async function unwrap<T>(
     });
   }
   if (error !== undefined || !response.ok) {
-    const body = error as Partial<ApiError> | undefined;
-    const message = body?.message ?? `Request failed with status ${response.status}`;
-    throw new ApiRequestError(`Error ${response.status}: ${message}`, response.status, body?.requestId ?? api.requestId);
+    const message = stringField(error, 'message') ?? `Request failed with status ${response.status}`;
+    throw new ApiRequestError(
+      `Error ${response.status}: ${message}`,
+      response.status,
+      stringField(error, 'requestId') ?? api.requestId,
+    );
   }
-  return data as T;
+  // The client sets data on every successful response ({} for an empty body)
+  if (data === undefined) throw new ApiRequestError('Empty response', response.status, api.requestId);
+  return data;
+}
+
+/** `body[key]` if the error body is an object with that string field (e.g. our `ApiError`). */
+function stringField(body: unknown, key: keyof ApiError): string | undefined {
+  if (typeof body !== 'object' || body === null) return undefined;
+  const value: unknown = Reflect.get(body, key);
+  return typeof value === 'string' ? value : undefined;
 }

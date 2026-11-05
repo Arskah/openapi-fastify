@@ -42,11 +42,13 @@ export function createContextLogger(fallback: Logger, bindings?: Record<string, 
     return child;
   };
 
-  const method = (level: (typeof LEVELS)[number]): LogFn =>
-    ((...args: Parameters<LogFn>) => {
+  const method =
+    (level: (typeof LEVELS)[number]): LogFn =>
+    (objOrMsg: Record<string, unknown> | string, msg?: string) => {
       const logger = current();
-      (logger[level] as (...args: Parameters<LogFn>) => void).apply(logger, args);
-    }) as LogFn;
+      if (typeof objOrMsg === 'string') logger[level](objOrMsg);
+      else logger[level](objOrMsg, msg);
+    };
 
   return {
     trace: method('trace'),

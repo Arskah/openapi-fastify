@@ -90,8 +90,8 @@ function encodeCursor(key: Record<string, unknown>): string {
 function decodeCursor(cursor: string): Record<string, unknown> {
   try {
     const key: unknown = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'));
-    if (key && typeof key === 'object' && typeof (key as { id?: unknown }).id === 'string') {
-      return { id: (key as { id: string }).id };
+    if (typeof key === 'object' && key !== null && 'id' in key && typeof key.id === 'string') {
+      return { id: key.id };
     }
   } catch {
     // fall through

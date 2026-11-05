@@ -25,7 +25,8 @@ pnpm -s cli todos list
 pnpm -s cli todos update <id> --done -v --request-id my-trace
 pnpm -s cli projects create Garden -t "Mow lawn" -t "Plant tulips"
 pnpm lambda:invoke "Water plants"   # runs the Lambda handler locally with a fake SQS batch
-pnpm check              # typecheck + layering rules (dependency-cruiser)
+pnpm check              # format check + lint + typecheck + layering rules
+pnpm fmt                # format everything with oxfmt
 ```
 
 `pnpm dev` is `db:up` → `db:init` (waits for DynamoDB) → `dev:server`; run the steps
@@ -124,17 +125,17 @@ API has no transactions. Its write methods would not take `tx`, and would run im
 Imports point one way, `features → repositories ← integrations`, with `container` wiring them together and
 `domain` innermost. `pnpm lint:deps` (dependency-cruiser, `.dependency-cruiser.cjs`) enforces it:
 
-| Rule | Why |
-|---|---|
-| `no-circular` | Use cases may call use cases in other features, but the graph must stay acyclic. |
-| `no-cross-feature-barrels` | Import `../todos/createTodo.ts`, not `../todos/index.ts`. A barrel drags in the whole feature, which turns an acyclic graph of use cases into cyclic features. |
-| `features-without-container` | Use cases name ports in their `Deps`, never `Pick<Container, …>`, so they cannot ask for the DynamoDB client or anything else the container holds. |
-| `features-use-ports` | Use cases import ports, never `integrations/`. Storage ops, clients and tables stay behind the port, so a use case cannot stage raw DynamoDB writes. |
-| `ports-are-abstract` | `repositories/` depends on nothing but `domain/`. |
-| `integrations-independent` | Each integration stands alone; the container combines them. |
-| `repositories-independent` | Repository implementations never use each other; atomicity comes from the use case's transaction. |
-| `container-is-infrastructure` | The container, ports and integrations never import use cases. |
-| `tables-without-io`, `domain-is-innermost`, `integrations-below-container` | Keep the direction one-way. |
+| Rule                                                                       | Why                                                                                                                                                            |
+| -------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `no-circular`                                                              | Use cases may call use cases in other features, but the graph must stay acyclic.                                                                               |
+| `no-cross-feature-barrels`                                                 | Import `../todos/createTodo.ts`, not `../todos/index.ts`. A barrel drags in the whole feature, which turns an acyclic graph of use cases into cyclic features. |
+| `features-without-container`                                               | Use cases name ports in their `Deps`, never `Pick<Container, …>`, so they cannot ask for the DynamoDB client or anything else the container holds.             |
+| `features-use-ports`                                                       | Use cases import ports, never `integrations/`. Storage ops, clients and tables stay behind the port, so a use case cannot stage raw DynamoDB writes.           |
+| `ports-are-abstract`                                                       | `repositories/` depends on nothing but `domain/`.                                                                                                              |
+| `integrations-independent`                                                 | Each integration stands alone; the container combines them.                                                                                                    |
+| `repositories-independent`                                                 | Repository implementations never use each other; atomicity comes from the use case's transaction.                                                              |
+| `container-is-infrastructure`                                              | The container, ports and integrations never import use cases.                                                                                                  |
+| `tables-without-io`, `domain-is-innermost`, `integrations-below-container` | Keep the direction one-way.                                                                                                                                    |
 
 ## Use cases
 
@@ -150,14 +151,21 @@ export const createProject = useCase(
   useTransaction(async (ctx: Transactional<CreateProjectDeps>, input: CreateProjectInput) => {
     const project = newProject(input, now);
     const todos = await Promise.all(input.todos.map((t) => createTodo(ctx, t, { projectId: project.id })));
-    ctx.projectRepository.create(ctx.tx, withTodos(project, todos.map((t) => t.id), now));
+    ctx.projectRepository.create(
+      ctx.tx,
+      withTodos(
+        project,
+        todos.map((t) => t.id),
+        now,
+      ),
+    );
     ctx.tx.afterCommit(() => ctx.logger.info({ id: project.id }, 'project created'));
     return toProjectDetails(project, todos);
   }),
 );
 
 // apps/server
-(request) => createProject(container, request.body)
+(request) => createProject(container, request.body);
 ```
 
 **Transactions are business logic.** Which writes must succeed together is a use case's decision, so
@@ -203,9 +211,10 @@ itself. With one file per use case, the graph is just `createProject → createT
   - Whether a send must arrive is a delivery guarantee. That belongs to the messaging adapter
     (after commit or outbox, see [Messaging](#messaging-and-transactions-design-not-implemented)), not
     to a flag at the call site.
-  
+
   A background option would only pay off for slow, non-critical work on the server. It would also
   need its rejections caught, and the pending hooks drained by `dispose()` and by `lambdaHandler`.
+
 - A transaction with a single write commits it as a plain Put, Update or Delete (half the cost).
 - Read-modify-write uses optimistic locking: `updateTodo` replaces only if `updatedAt` is unchanged,
   else 409.
@@ -317,7 +326,7 @@ only on the `RootTransaction` that `beginTransaction()` returns, and only `useTr
 - **Rollback-only also blocks legitimate recovery.** "Try X, else Y" inside one transaction is
   impossible. With DynamoDB this rarely matters, because condition failures only appear at commit.
 - **Floating promises.** A callee that is not awaited may stage after the commit (it throws) or race
-  it. Await every use case.
+  it. `pnpm lint` fails on any promise that is not awaited (`no-floating-promises`).
 - **`afterCommit` is not durable.** A crash after the commit loses the hook. It is fine for logs;
   events need an outbox (an item written in the same transaction) or DynamoDB Streams. See
   [Messaging and transactions](#messaging-and-transactions-design-not-implemented).
@@ -416,14 +425,14 @@ use case owns the boundary, and only the repository knows DynamoDB.
 
 ### Comparison
 
-| | Boundary owned by use case | Writing outside a transaction | Atomic composition | Storage hidden from business code | Failed condition means… decided by |
-|---|---|---|---|---|---|
-| 1 Ambient per use case | ✗ framework | fails at runtime | ✓ implicit | ✓ | repository |
-| 2 `transaction()` in body | ✓ | fails to compile | ✓ by convention | ✓ | repository |
-| **3 `useTransaction()`** | ✓ at definition | fails to compile | ✓ enforced | ✓ | repository |
-| 4 Labelled ops | ✓ | n/a | ✗ manual | ✗ | use case |
-| 5 Hybrid | ✓ | n/a | ✗ manual | ✗ partly | use case |
-| 6 Aggregate + events | ✓ | n/a | via events | ✓ | each handler |
+|                           | Boundary owned by use case | Writing outside a transaction | Atomic composition | Storage hidden from business code | Failed condition means… decided by |
+| ------------------------- | -------------------------- | ----------------------------- | ------------------ | --------------------------------- | ---------------------------------- |
+| 1 Ambient per use case    | ✗ framework                | fails at runtime              | ✓ implicit         | ✓                                 | repository                         |
+| 2 `transaction()` in body | ✓                          | fails to compile              | ✓ by convention    | ✓                                 | repository                         |
+| **3 `useTransaction()`**  | ✓ at definition            | fails to compile              | ✓ enforced         | ✓                                 | repository                         |
+| 4 Labelled ops            | ✓                          | n/a                           | ✗ manual           | ✗                                 | use case                           |
+| 5 Hybrid                  | ✓                          | n/a                           | ✗ manual           | ✗ partly                          | use case                           |
+| 6 Aggregate + events      | ✓                          | n/a                           | via events         | ✓                                 | each handler                       |
 
 ### AsyncLocalStorage: for logging, not for transactions
 
@@ -434,7 +443,7 @@ caller opens a transaction, and repositories pick it up without it appearing in 
 ```ts
 // caller
 await provideTransaction(async () => {
-  await createUser(data);          // no tx parameter
+  await createUser(data); // no tx parameter
   await createUserProfile(data);
 });
 
@@ -452,19 +461,19 @@ export const createProject = useCase('createProject', useTransaction(async (ctx:
 }));
 ```
 
-| | ALS (article) | Explicit `ctx.tx` (option 3) |
-|---|---|---|
-| How the transaction reaches the repository | Hidden: the repository reads the ambient store | Passed as an argument |
-| Who opens and commits it | Any caller of `provideTransaction()` | Only a use case declared with `useTransaction()` |
-| A write outside any transaction | Silently auto-commits through plain `db` | Does not compile (`ctx.tx` does not exist) |
-| Is it visible in signatures? | No; repositories stay unchanged, which the article calls open/closed | Yes: `create(tx, todo)`, `Transactional<Deps>` |
-| Does this use case write? | Only by reading its body | Visible where it is defined |
-| Nested calls | Reuse the ambient transaction | Join `ctx.tx`; only the outermost commits |
-| A failed callee whose error the caller swallows | Not addressed; with SQL, its writes would still commit | Rollback-only: the commit fails, and nothing is written |
-| Kind of transaction | Interactive SQL (Drizzle `db.transaction`) | DynamoDB write batch, staged until commit |
-| Reads see the transaction's own writes | Yes | No |
-| Testing | Set up the ALS context or mock modules | Pass a fake `tx` and fake ports in `ctx` |
-| Context leaks | Detached async work or `enterWith()` can carry or lose the transaction | None; it only goes where it is passed |
+|                                                 | ALS (article)                                                          | Explicit `ctx.tx` (option 3)                            |
+| ----------------------------------------------- | ---------------------------------------------------------------------- | ------------------------------------------------------- |
+| How the transaction reaches the repository      | Hidden: the repository reads the ambient store                         | Passed as an argument                                   |
+| Who opens and commits it                        | Any caller of `provideTransaction()`                                   | Only a use case declared with `useTransaction()`        |
+| A write outside any transaction                 | Silently auto-commits through plain `db`                               | Does not compile (`ctx.tx` does not exist)              |
+| Is it visible in signatures?                    | No; repositories stay unchanged, which the article calls open/closed   | Yes: `create(tx, todo)`, `Transactional<Deps>`          |
+| Does this use case write?                       | Only by reading its body                                               | Visible where it is defined                             |
+| Nested calls                                    | Reuse the ambient transaction                                          | Join `ctx.tx`; only the outermost commits               |
+| A failed callee whose error the caller swallows | Not addressed; with SQL, its writes would still commit                 | Rollback-only: the commit fails, and nothing is written |
+| Kind of transaction                             | Interactive SQL (Drizzle `db.transaction`)                             | DynamoDB write batch, staged until commit               |
+| Reads see the transaction's own writes          | Yes                                                                    | No                                                      |
+| Testing                                         | Set up the ALS context or mock modules                                 | Pass a fake `tx` and fake ports in `ctx`                |
+| Context leaks                                   | Detached async work or `enterWith()` can carry or lose the transaction | None; it only goes where it is passed                   |
 
 Why option 3 does not use ALS for transactions:
 
@@ -490,16 +499,16 @@ are used both inside and outside them.
 
 ### Further reading
 
-- Martin Fowler, *Patterns of Enterprise Application Architecture* (2002): Unit of Work, Repository,
+- Martin Fowler, _Patterns of Enterprise Application Architecture_ (2002): Unit of Work, Repository,
   Table Data Gateway, Transaction Script. <https://martinfowler.com/eaaCatalog/unitOfWork.html>
-- Harry Percival and Bob Gregory, *Architecture Patterns with Python*, chapter 6: an explicit unit of
+- Harry Percival and Bob Gregory, _Architecture Patterns with Python_, chapter 6: an explicit unit of
   work owned by the service layer. <https://www.cosmicpython.com/book/chapter_06_uow.html>
-- Vaughn Vernon, *Effective Aggregate Design* (2011), and Pat Helland, *Life beyond Distributed
-  Transactions* (2007): one aggregate per transaction.
+- Vaughn Vernon, _Effective Aggregate Design_ (2011), and Pat Helland, _Life beyond Distributed
+  Transactions_ (2007): one aggregate per transaction.
 - Transactions and logging through AsyncLocalStorage in Node.js (wempe.dev).
   <https://wempe.dev/blog/nodejs-async-local-storage-context>
 - Chris Richardson, Transactional Outbox (option B under Messaging). <https://microservices.io/patterns/data/transactional-outbox.html>
-- Alex DeBrie, *The DynamoDB Book*: transactions, condition expressions, uniqueness-guard items.
+- Alex DeBrie, _The DynamoDB Book_: transactions, condition expressions, uniqueness-guard items.
 
 ## Messaging and transactions (design, not implemented)
 
@@ -507,7 +516,7 @@ Next to DynamoDB, the second kind of persistent I/O a real service does is sendi
 example to SQS. This section designs that, with no code yet, to show how messaging fits the
 transaction model above.
 
-**The problem is a dual write.** A use case that updates a todo *and* announces it (`todo.completed`)
+**The problem is a dual write.** A use case that updates a todo _and_ announces it (`todo.completed`)
 writes to two systems. SQS cannot join a DynamoDB transaction, so the two writes cannot be atomic as
 they stand. Every design has to choose what happens when one succeeds and the other does not.
 
@@ -564,7 +573,7 @@ sequenceDiagram
     Q-->>Tx: ok
 ```
 
-- **Guarantee: at most once.** Never sent when the commit fails. *Lost* if the process dies, the
+- **Guarantee: at most once.** Never sent when the commit fails. _Lost_ if the process dies, the
   Lambda times out, or SQS errors between the commit and the send.
 - **Pros:** no extra infrastructure, immediate delivery, and the DynamoDB transaction stays as it is,
   with no extra write.
@@ -621,20 +630,20 @@ sequenceDiagram
     doubles.
   - Ordering follows the stream, per item. Strict ordering needs a FIFO queue and a
     `MessageGroupId`, such as the todo ID.
-- **Fits:** anything another service *acts on*: domain events, commands, integrations.
+- **Fits:** anything another service _acts on_: domain events, commands, integrations.
 
 ### Side by side
 
-| | A: after commit | B: outbox |
-|---|---|---|
-| Commit fails | not sent ✓ | not sent ✓ |
-| Crash between commit and send | **lost** ✗ | relayed later ✓ |
-| SQS unavailable | lost, or retried in process until the process ends | retried by the relay ✓ |
-| Delivery | at most once | at least once (consumers deduplicate) |
-| Keeps the `Transaction` contract | only half (no phantom messages, but losses) | fully |
-| Latency | immediate | stream lag |
-| DynamoDB transaction | unchanged | +1 write per message (100-write limit, no single-write fast path) |
-| Infrastructure | SQS client | outbox table + stream + TTL, relay Lambda, SQS client |
+|                                  | A: after commit                                    | B: outbox                                                         |
+| -------------------------------- | -------------------------------------------------- | ----------------------------------------------------------------- |
+| Commit fails                     | not sent ✓                                         | not sent ✓                                                        |
+| Crash between commit and send    | **lost** ✗                                         | relayed later ✓                                                   |
+| SQS unavailable                  | lost, or retried in process until the process ends | retried by the relay ✓                                            |
+| Delivery                         | at most once                                       | at least once (consumers deduplicate)                             |
+| Keeps the `Transaction` contract | only half (no phantom messages, but losses)        | fully                                                             |
+| Latency                          | immediate                                          | stream lag                                                        |
+| DynamoDB transaction             | unchanged                                          | +1 write per message (100-write limit, no single-write fast path) |
+| Infrastructure                   | SQS client                                         | outbox table + stream + TTL, relay Lambda, SQS client             |
 
 **Variant of B: change data capture.** Run the stream on the `todos` table itself, and derive events
 from item changes (old image vs new image) in the relay. This needs no outbox writes and no extra cost
@@ -677,3 +686,18 @@ than 3 days (`minimumReleaseAge: 4320`).
 compiler API, so `packages/api-client` pins `typescript@6.0.3` as a devDependency only to satisfy that peer.
 dependency-cruiser has the same limit (`typescript <7`), so a `packageExtensions` entry gives it its
 own `typescript@6.0.3`.
+
+## Formatting and linting
+
+[oxc](https://oxc.rs) handles both. `pnpm fmt` formats with oxfmt (`.oxfmtrc.json`: 120 columns,
+single quotes, trailing commas). `pnpm lint` runs oxlint (`.oxlintrc.json`) with `--type-aware`, so
+rules that need type information run through `oxlint-tsgolint`, which is built on the TypeScript 7
+compiler. Warnings fail the run (`--deny-warnings`). Beyond the `correctness` and `suspicious`
+categories, these rules are errors:
+
+- `no-floating-promises`: an un-awaited use case or `commit()` could stage writes after the commit,
+  or race it. This is the floating-promises caveat under option 3.
+- `no-misused-promises`, `await-thenable`: async callbacks where a sync one is expected, and awaiting
+  non-promises.
+
+The generated API client is excluded from both tools.

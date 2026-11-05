@@ -1,5 +1,4 @@
 import { GetCommand } from '@aws-sdk/lib-dynamodb';
-import type { Project } from '../../domain/project.ts';
 import { ConflictError, NotFoundError } from '../../errors.ts';
 import type { ProjectRepository } from '../../repositories/project.repository.ts';
 import type { RepositoryDeps } from './deps.ts';

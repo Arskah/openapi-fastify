@@ -11,9 +11,12 @@ const app = await buildApp({ logger, container });
 app.addHook('onClose', async () => container.dispose());
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
-  process.once(signal, async () => {
+  process.once(signal, () => {
     app.log.info({ signal }, 'shutting down');
-    await app.close();
+    app.close().catch((err: unknown) => {
+      app.log.error({ err }, 'shutdown failed');
+      process.exitCode = 1;
+    });
   });
 }
 

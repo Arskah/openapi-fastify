@@ -9,7 +9,14 @@ const create = buildCommand({
     positional: { kind: 'tuple', parameters: [{ brief: 'Project name', parse: String, placeholder: 'name' }] },
     flags: {
       ...apiFlags,
-      todo: { kind: 'parsed', parse: String, brief: 'Initial todo title (repeatable)', placeholder: 'title', variadic: true, optional: true },
+      todo: {
+        kind: 'parsed',
+        parse: String,
+        brief: 'Initial todo title (repeatable)',
+        placeholder: 'title',
+        variadic: true,
+        optional: true,
+      },
     },
     aliases: { ...apiAliases, t: 'todo' },
   },
@@ -33,7 +40,7 @@ const get = buildCommand({
       const project = await unwrap(api, getProject({ client: api.client, path: { id } }));
       if (flags.json) return printJson(project);
       console.log(`${project.name} (${project.id})`);
-      console.table(project.todos.map(({ id, title, done }) => ({ id, title, done })));
+      console.table(project.todos.map((todo) => ({ id: todo.id, title: todo.title, done: todo.done })));
     });
   },
 });
