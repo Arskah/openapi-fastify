@@ -30,26 +30,43 @@ export function createApi({ apiUrl, requestId = randomUUID(), verbose }: ApiOpti
   return { client, requestId };
 }
 
+/** A request that failed or never got a response; `status` is 0 when the API could not be reached. */
 export class ApiRequestError extends Error {
   readonly status: number;
   readonly requestId: string;
 
-  constructor(status: number, body: Partial<ApiError> | undefined, requestId: string) {
-    super(body?.message ?? `Request failed with status ${status}`);
+  constructor(message: string, status: number, requestId: string, options?: ErrorOptions) {
+    super(`${message} (request ${requestId})`, options);
     this.name = 'ApiRequestError';
     this.status = status;
-    this.requestId = body?.requestId ?? requestId;
+    this.requestId = requestId;
   }
+}
+
+/** Short reason for a network failure, e.g. `ECONNREFUSED` from undici's `fetch failed`. */
+function networkReason(error: unknown): string {
+  const cause = error instanceof Error ? error.cause : undefined;
+  if (cause && typeof cause === 'object' && 'code' in cause && typeof cause.code === 'string') return cause.code;
+  if (cause instanceof Error) return cause.message;
+  return error instanceof Error ? error.message : String(error);
 }
 
 /** Resolves to the response data or throws an `ApiRequestError`. */
 export async function unwrap<T>(
   api: Api,
-  result: Promise<{ data?: T; error?: unknown; response?: Response }>,
+  result: Promise<{ data?: T; error?: unknown; request?: Request; response?: Response }>,
 ): Promise<T> {
-  const { data, error, response } = await result;
-  if (error !== undefined || !response?.ok) {
-    throw new ApiRequestError(response?.status ?? 0, error as Partial<ApiError> | undefined, api.requestId);
+  const { data, error, request, response } = await result;
+  if (!response) {
+    const origin = request ? new URL(request.url).origin : 'the API';
+    throw new ApiRequestError(`Could not reach ${origin}: ${networkReason(error)}`, 0, api.requestId, {
+      cause: error,
+    });
+  }
+  if (error !== undefined || !response.ok) {
+    const body = error as Partial<ApiError> | undefined;
+    const message = body?.message ?? `Request failed with status ${response.status}`;
+    throw new ApiRequestError(`Error ${response.status}: ${message}`, response.status, body?.requestId ?? api.requestId);
   }
   return data as T;
 }

@@ -1,6 +1,6 @@
 import { createTodo, deleteTodo, getTodo, listTodos, type Todo, unwrap, updateTodo } from '@demo/api-client';
 import { buildCommand, buildRouteMap } from '@stricli/core';
-import { apiAliases, apiFlags, apiFrom, type ApiFlags, type CliContext } from '../context.ts';
+import { apiAliases, apiFlags, type ApiFlags, withApi } from '../context.ts';
 import { printJson } from '../output.ts';
 
 function parseLimit(value: string): number {
@@ -28,13 +28,14 @@ const list = buildCommand({
     },
     aliases: { ...apiAliases, l: 'limit', c: 'cursor' },
   },
-  async func(this: CliContext, flags: ApiFlags & { limit: number; cursor?: string; json: boolean }) {
-    const api = apiFrom(flags);
-    const { limit, cursor } = flags;
-    const page = await unwrap(api, listTodos({ client: api.client, query: { limit, cursor } }));
-    if (flags.json) return printJson(page);
-    printTodos(page.items);
-    if (page.nextCursor) console.log(`Next page: --cursor ${page.nextCursor}`);
+  func(flags: ApiFlags & { limit: number; cursor?: string; json: boolean }) {
+    return withApi(flags, async (api) => {
+      const { limit, cursor } = flags;
+      const page = await unwrap(api, listTodos({ client: api.client, query: { limit, cursor } }));
+      if (flags.json) return printJson(page);
+      printTodos(page.items);
+      if (page.nextCursor) console.log(`Next page: --cursor ${page.nextCursor}`);
+    });
   },
 });
 
@@ -45,9 +46,10 @@ const get = buildCommand({
     flags: apiFlags,
     aliases: apiAliases,
   },
-  async func(this: CliContext, flags: ApiFlags, id: string) {
-    const api = apiFrom(flags);
-    printJson(await unwrap(api, getTodo({ client: api.client, path: { id } })));
+  func(flags: ApiFlags, id: string) {
+    return withApi(flags, async (api) => {
+      printJson(await unwrap(api, getTodo({ client: api.client, path: { id } })));
+    });
   },
 });
 
@@ -61,9 +63,10 @@ const add = buildCommand({
     },
     aliases: { ...apiAliases, d: 'description' },
   },
-  async func(this: CliContext, flags: ApiFlags & { description?: string }, title: string) {
-    const api = apiFrom(flags);
-    printJson(await unwrap(api, createTodo({ client: api.client, body: { title, description: flags.description } })));
+  func(flags: ApiFlags & { description?: string }, title: string) {
+    return withApi(flags, async (api) => {
+      printJson(await unwrap(api, createTodo({ client: api.client, body: { title, description: flags.description } })));
+    });
   },
 });
 
@@ -80,10 +83,11 @@ const update = buildCommand({
     },
     aliases: { ...apiAliases, t: 'title', d: 'description' },
   },
-  async func(this: CliContext, flags: ApiFlags & { title?: string; description?: string; done?: boolean }, id: string) {
-    const api = apiFrom(flags);
-    const { title, description, done } = flags;
-    printJson(await unwrap(api, updateTodo({ client: api.client, path: { id }, body: { title, description, done } })));
+  func(flags: ApiFlags & { title?: string; description?: string; done?: boolean }, id: string) {
+    return withApi(flags, async (api) => {
+      const { title, description, done } = flags;
+      printJson(await unwrap(api, updateTodo({ client: api.client, path: { id }, body: { title, description, done } })));
+    });
   },
 });
 
@@ -94,10 +98,11 @@ const rm = buildCommand({
     flags: apiFlags,
     aliases: apiAliases,
   },
-  async func(this: CliContext, flags: ApiFlags, id: string) {
-    const api = apiFrom(flags);
-    await unwrap(api, deleteTodo({ client: api.client, path: { id } }));
-    console.log(`Deleted ${id}`);
+  func(flags: ApiFlags, id: string) {
+    return withApi(flags, async (api) => {
+      await unwrap(api, deleteTodo({ client: api.client, path: { id } }));
+      console.log(`Deleted ${id}`);
+    });
   },
 });
 

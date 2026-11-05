@@ -1,6 +1,6 @@
 import { addProjectTodo, createProject, getProject, unwrap } from '@demo/api-client';
 import { buildCommand, buildRouteMap } from '@stricli/core';
-import { apiAliases, apiFlags, apiFrom, type ApiFlags, type CliContext } from '../context.ts';
+import { apiAliases, apiFlags, type ApiFlags, withApi } from '../context.ts';
 import { printJson } from '../output.ts';
 
 const create = buildCommand({
@@ -13,10 +13,11 @@ const create = buildCommand({
     },
     aliases: { ...apiAliases, t: 'todo' },
   },
-  async func(this: CliContext, flags: ApiFlags & { todo?: string[] }, name: string) {
-    const api = apiFrom(flags);
-    const todos = (flags.todo ?? []).map((title) => ({ title }));
-    printJson(await unwrap(api, createProject({ client: api.client, body: { name, todos } })));
+  func(flags: ApiFlags & { todo?: string[] }, name: string) {
+    return withApi(flags, async (api) => {
+      const todos = (flags.todo ?? []).map((title) => ({ title }));
+      printJson(await unwrap(api, createProject({ client: api.client, body: { name, todos } })));
+    });
   },
 });
 
@@ -27,12 +28,13 @@ const get = buildCommand({
     flags: { ...apiFlags, json: { kind: 'boolean', brief: 'Print raw JSON', default: false } },
     aliases: apiAliases,
   },
-  async func(this: CliContext, flags: ApiFlags & { json: boolean }, id: string) {
-    const api = apiFrom(flags);
-    const project = await unwrap(api, getProject({ client: api.client, path: { id } }));
-    if (flags.json) return printJson(project);
-    console.log(`${project.name} (${project.id})`);
-    console.table(project.todos.map(({ id, title, done }) => ({ id, title, done })));
+  func(flags: ApiFlags & { json: boolean }, id: string) {
+    return withApi(flags, async (api) => {
+      const project = await unwrap(api, getProject({ client: api.client, path: { id } }));
+      if (flags.json) return printJson(project);
+      console.log(`${project.name} (${project.id})`);
+      console.table(project.todos.map(({ id, title, done }) => ({ id, title, done })));
+    });
   },
 });
 
@@ -52,13 +54,14 @@ const addTodo = buildCommand({
     },
     aliases: { ...apiAliases, d: 'description' },
   },
-  async func(this: CliContext, flags: ApiFlags & { description?: string }, id: string, title: string) {
-    const api = apiFrom(flags);
-    const { todo } = await unwrap(
-      api,
-      addProjectTodo({ client: api.client, path: { id }, body: { title, description: flags.description } }),
-    );
-    printJson(todo);
+  func(flags: ApiFlags & { description?: string }, id: string, title: string) {
+    return withApi(flags, async (api) => {
+      const { todo } = await unwrap(
+        api,
+        addProjectTodo({ client: api.client, path: { id }, body: { title, description: flags.description } }),
+      );
+      printJson(todo);
+    });
   },
 });
 

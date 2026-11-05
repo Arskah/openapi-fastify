@@ -1,4 +1,4 @@
-import { createApi, type Api } from '@demo/api-client';
+import { ApiRequestError, createApi, type Api } from '@demo/api-client';
 import type { CommandContext } from '@stricli/core';
 
 export interface CliContext extends CommandContext {
@@ -32,6 +32,21 @@ export const apiFlags = {
 
 export const apiAliases = { v: 'verbose' } as const;
 
-export function apiFrom({ apiUrl, requestId = process.env.REQUEST_ID, verbose }: ApiFlags): Api {
+function apiFrom({ apiUrl, requestId = process.env.REQUEST_ID, verbose }: ApiFlags): Api {
   return createApi({ apiUrl, requestId, verbose });
+}
+
+/**
+ * Runs `fn` with an API client built from the command's flags.
+ *
+ * API failures are returned rather than thrown: Stricli prints a returned
+ * error's message alone, while a thrown one gets a stack trace.
+ */
+export async function withApi(flags: ApiFlags, fn: (api: Api) => Promise<void>): Promise<void | Error> {
+  try {
+    await fn(apiFrom(flags));
+  } catch (error) {
+    if (error instanceof ApiRequestError) return error;
+    throw error;
+  }
 }

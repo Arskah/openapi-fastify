@@ -59,7 +59,9 @@ prints it on errors, so you can grep the server logs for it.
 
 **CLI.** Stricli has no global flags, so every API command spreads `apiFlags` (`--api-url`,
 `--request-id`, `-v`) from `apps/cli/src/context.ts` into its own flags. They go after the
-subcommand: `demo todos list -v`.
+subcommand: `demo todos list -v`. Commands run their API calls through `withApi(flags, …)`, which
+returns `ApiRequestError`s to Stricli so it prints just the message, e.g.
+`Could not reach http://localhost:3000: ECONNREFUSED (request …)`.
 
 **Lambda.** Every handler in `apps/lambda` is wrapped with `lambdaHandler()` (`src/lambda.ts`).
 On the first invocation in a sandbox it builds config, the Lambda's own pino logger (`src/logger.ts`)
