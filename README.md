@@ -195,13 +195,31 @@ itself. With one file per use case, the graph is just `createProject → createT
 - A transaction with a single write commits it as a plain Put, Update or Delete (half the cost).
 - Read-modify-write uses optimistic locking: `updateTodo` replaces only if `updatedAt` is unchanged,
   else 409.
+- Reads are eventually consistent (`ProjectRepository.get` has a `consistent` option, but nothing passes
+  it). A read-modify-write straight after another write can read a stale `updatedAt` or list index and
+  get a spurious 409. The data stays correct, because the condition catches it; a retry succeeds.
+
+The contract every implementation must keep (deferred writes, all-or-nothing commit, preconditions
+checked on commit) is written down on the port in `repositories/transaction.ts`. A second integration
+implements that, not the DynamoDB behaviour.
+
+**Data model.** The todo–project relationship is stored twice: `todo.projectId` and
+`project.todoIds[]`. Keeping the two in step is what the composed transactions do. It is also why
+`removeTodoAt` works by list index and returns 409 when two todos of one project are deleted at the
+same time, and why a project is created with at most 50 todos. That is deliberate here: it gives the
+demo a real cross-entity invariant to compose. In production DynamoDB, the usual design keeps
+`projectId` only on the todo and adds a global secondary index on it, so "todos of a project" is a
+Query. That needs no list, no index bookkeeping, and no size limit. Likewise, `listTodos` is a Scan,
+which is fine for a demo table but reads the whole table as it pages.
 
 **Branded entities.** `Todo` and `Project` are Zod-branded. Only the domain functions or parsing
 (repositories parse stored items) produce them, so a repository cannot be handed an object literal
 that skipped the rules.
 
-**Testing.** Pass a fake `ctx` containing only what the use case declares. A composed use case calls
-the real callee, so fake at the repository boundary.
+**Testing.** There is no test suite yet. The design is meant for this approach: pass a fake `ctx`
+containing only the ports the use case declares, plus a fake transaction. A composed use case calls the
+real callee, so fake at the repository boundary, and test the DynamoDB integration separately
+against DynamoDB Local.
 
 ## Transactions: design options
 

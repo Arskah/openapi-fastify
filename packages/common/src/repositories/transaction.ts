@@ -1,7 +1,23 @@
 /**
  * An open transaction, as use cases see it. Repository write methods take it as
- * their first argument; what they write happens when the transaction commits,
- * all or nothing. How it commits is up to the integration behind it.
+ * their first argument. How it commits is up to the integration behind it, but
+ * every implementation (and every repository that takes it) keeps this contract:
+ *
+ * - Writes are deferred. A write method only records the write; nothing is
+ *   stored until the root transaction commits, and reads, even within the same
+ *   transaction, see only what was committed before.
+ * - Commit is all or nothing.
+ * - A write's precondition (exists, unchanged since, …) is checked on commit.
+ *   A failed one makes `commit()` reject with the domain error the repository
+ *   documents for that write (`NotFoundError`, `ConflictError`); write methods
+ *   themselves return nothing and do not fail on stored state.
+ * - A write method may throw immediately on misuse the integration cannot
+ *   commit, e.g. writing the same entity twice or exceeding a size limit
+ *   (DynamoDB: one write per item, at most 100 writes).
+ *
+ * A repository whose backend has no transactions (e.g. an HTTP API) does not
+ * take a `Transaction`; its writes happen immediately and are not atomic with
+ * anything else.
  */
 export interface Transaction {
   /** Runs `fn` once this transaction has committed; skipped if it fails. */
