@@ -340,6 +340,53 @@ only on the `RootTransaction` that `beginTransaction()` returns, and only `useTr
   invocation then fails, the redelivered message creates a second todo with a new ID. That needs an
   idempotency key, such as deriving the ID from the message ID or writing a guard item in the same
   transaction.
+- **Mixing transactional integrations is only caught at runtime.** See
+  [One transactional store per process](#one-transactional-store-per-process).
+
+### One transactional store per process
+
+The `Transaction` port is generic on purpose (`afterCommit`, `rollbackOnly`), so the ports do not name
+a store. At runtime, though, only one kind of object fits it: the `DynamoTransaction` that
+`beginTransaction()` returns. DynamoDB repositories unwrap it to stage their writes:
+
+```ts
+// integrations/dynamo/todo.repository.ts
+create(tx, todo) {
+  DynamoTransaction.of(tx).stage({ … }); // TypeError unless tx is a DynamoTransaction
+}
+```
+
+Today that check only catches wiring mistakes, such as a test passing a fake transaction to a real
+DynamoDB repository. It would matter once a second transactional store exists. Suppose projects moved
+to Postgres:
+
+```ts
+useTransaction(async (ctx: Transactional<Deps>, input) => {
+  await createTodo(ctx, …); // DynamoDB repo: DynamoTransaction.of(ctx.tx) ✓
+  ctx.projectRepository.create(ctx.tx, project); // Postgres repo: PgTransaction.of(ctx.tx) ✗ at runtime
+});
+```
+
+This compiles, because both ports take the same `Transaction`, and fails when it runs. The failure is
+the honest outcome: one commit cannot be atomic across DynamoDB and Postgres. That would need
+two-phase commit, which neither offers, or a saga or an outbox.
+
+**The rule here: one transactional store per process.** Other integrations do not join transactions.
+An HTTP API writes immediately, and its write methods take no `tx`. Messages go through an outbox,
+which is just another DynamoDB write (see [Messaging](#messaging-and-transactions-design-not-implemented)).
+This is the usual real-world constraint: one transactional database per service.
+
+If a second transactional store were ever needed, there are two ways to make mixing them a compile
+error:
+
+- **Brand the transaction per store:** `Transaction<'dynamo'>`, with `create(tx: Transaction<'dynamo'>, …)`.
+  This is simple, but the ports then name the store, which partly undoes the ports-and-adapters split.
+  Moving a repository to another store means changing its port.
+- **Make the ports generic over the transaction:** `TodoRepository<Tx extends Transaction>`, with the
+  container choosing `Tx`. It is type-safe and keeps the ports store-neutral, but every `Deps` type and
+  use case carries the `Tx` parameter.
+
+Neither is worth it while there is one store, so the runtime check stays.
 
 ### Option 4: labelled ops and `transact()`
 
