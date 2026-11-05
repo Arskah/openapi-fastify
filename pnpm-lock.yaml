@@ -202,6 +202,9 @@ importers:
       '@types/aws-lambda':
         specifier: 8.10.164
         version: 8.10.164
+      pino-pretty:
+        specifier: 13.2.0
+        version: 13.2.0
 
   apps/server:
     dependencies:

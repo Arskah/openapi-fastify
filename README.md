@@ -53,18 +53,37 @@ Repositories and use cases log through a context logger that writes through the 
 logger. Every log line from common code therefore carries `requestId`, even though the
 repositories are singletons. Outside a
 context (startup, scripts), it falls back to the root logger. Other entry points, such as a queue
-worker, call `runWithContext` the same way: `apps/lambda` runs each SQS record in a context whose
-logger carries the Lambda `requestId` and the `messageId`. The CLI sends a fresh UUID (or `--request-id`) and
+worker, call `runWithContext` the same way, as `apps/lambda` does (see Lambda below). The CLI
+sends a fresh UUID (or `--request-id`) and
 prints it on errors, so you can grep the server logs for it.
 
 **CLI.** Stricli has no global flags, so every API command spreads `apiFlags` (`--api-url`,
 `--request-id`, `-v`) from `apps/cli/src/context.ts` into its own flags. They go after the
 subcommand: `demo todos list -v`.
 
-**Lambda.** `apps/lambda/src/handler.ts` builds the container at module scope (once per cold start)
-and handles an SQS batch whose bodies are `CreateTodoInput` JSON. Malformed messages and
-`AppError`s are logged and dropped; other failures go to `batchItemFailures` so SQS retries only
-those records.
+**Lambda.** Every handler in `apps/lambda` is wrapped with `lambdaHandler()` (`src/lambda.ts`).
+On the first invocation in a sandbox it builds config, the Lambda's own pino logger (`src/logger.ts`)
+and the container, and reuses them while the sandbox stays warm. Each invocation runs inside
+`runWithContext` with a child logger bound to `requestId` (the Lambda request ID) and
+`aws: { accountId, region, functionName, functionVersion, traceId }`, with the account and region
+taken from `invokedFunctionArn`. Common code logs through the container's context logger, so every
+line it writes carries those AWS fields without knowing it runs in Lambda. The wrapper also
+logs invocation start (with `coldStart`), duration and failures. A handler gets
+`{ container, logger, context }`.
+
+`sqsHandler(schema, handle)` (`src/sqs.ts`) builds on it for SQS: it parses each record's body with
+`schema` and runs `handle` per record in a nested context that adds
+`sqs: { messageId, queue, receiveCount }`, so common's log lines also say which message they belong
+to. Malformed bodies and `AppError`s are logged and dropped; other failures go to
+`batchItemFailures` so SQS retries only those records (on a FIFO queue, also every record after the
+first failure). A consumer is then just the use-case call:
+
+```ts
+// handlers/createTodos.ts
+export const handler = sqsHandler(CreateTodoInputSchema, async (input, { container }) => {
+  await createTodo(container, input);
+});
+```
 
 **Config.** `CommonConfigSchema` covers what common needs (AWS, tables). Each app extends it
 with its own sections (`ServerConfigSchema`, `LambdaConfigSchema`) and passes the whole object into the container,
