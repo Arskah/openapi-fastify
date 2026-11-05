@@ -43,7 +43,7 @@ pnpm generate   # writes apps/server/openapi.json, then regenerates packages/api
 
 **Container.** `createContainer({ config, logger })` in `packages/common/src/container.ts` builds
 the process-wide infrastructure once: config, context logger, DynamoDB client, repositories and the
-unit-of-work factory. Use cases are not in it (see [Use cases](#use-cases)). Modules compose with
+`beginTransaction`. Use cases are not in it (see [Use cases](#use-cases)). Modules compose with
 `extend()`, and each module's parameter type is checked against what is already provided.
 
 **Request-scoped logging.** The server derives a request ID from the `x-request-id` header,
@@ -98,10 +98,11 @@ packages/common/src/
   domain/            ids.ts, todo.ts, project.ts: branded entities + rules (newTodo, applyTodoUpdate, newProject, withTodos)
   data/
     tables/          storage format per table: definition, key, item mapping, write ops (no I/O)
-    unit-of-work.ts  a unit of work: collects staged writes, commits them in one TransactWriteItems
-    transaction.ts   commitWrites(): failed condition → the error chosen by whoever staged the write
+    dynamo.ts        DynamoClient: send() for reads, writeAtomically() (failed condition → the writer's error)
+    transaction.ts   Transaction port + DynamoTransaction: stages writes, commits them in one call
+    write.ts         Write / WriteOp: storage ops built by tables/, never seen by features/
     *.repository.ts  one per table; reads run immediately, writes take a Transaction and stage into it
-  container.ts       infrastructure only: config, logger, dynamo, repositories, beginUnitOfWork
+  container.ts       infrastructure only: config, logger, dynamo, repositories, beginTransaction
   features/
     use-case.ts      useCase() helper
     transaction.ts   useTransaction(): declares a use case transactional
@@ -116,7 +117,7 @@ Imports point one way, `features → container → data → domain`. `pnpm lint:
 | `no-circular` | Use cases may call use cases in other features, but the graph must stay acyclic. |
 | `no-cross-feature-barrels` | Import `../todos/createTodo.ts`, not `../todos/index.ts`. A barrel drags in the whole feature, which turns an acyclic graph of use cases into cyclic features. |
 | `container-is-infrastructure` | The container and data layer never import use cases. |
-| `repositories-independent` | Repositories never use each other; atomicity comes from the unit of work. |
+| `repositories-independent` | Repositories never use each other; atomicity comes from the use case's transaction. |
 | `features-without-storage` | Use cases write through repositories, never by staging raw DynamoDB ops. |
 | `tables-without-io`, `domain-is-innermost`, `data-below-container` | Keep the direction one-way. |
 
@@ -169,7 +170,7 @@ inherits the dependencies of all the others. `projects → todos` (for create) p
 itself. With one file per use case, the graph is just `createProject → createTodo` and
 `deleteTodo → detachTodoFromProject`.
 
-**Rules of the unit of work** (DynamoDB transactions are write batches, not interactive):
+**Rules of transactions** (DynamoDB transactions are write batches, not interactive):
 
 - Staged writes are invisible to reads in the same use case. Express preconditions as conditions
   (`attribute_exists`, `updatedAt = :expected`, `todoIds[i] = :id`), not read-then-check alone.
@@ -177,7 +178,7 @@ itself. With one file per use case, the graph is just `createProject → createT
 - At most one write per item and 100 writes per transaction; staging throws early otherwise.
 - Side effects (logs, events) go in `ctx.tx.afterCommit`, which runs once after the outermost commit and
   never if it fails.
-- A unit of work with a single write commits it without a transaction.
+- A transaction with a single write commits it as a plain Put, Update or Delete (half the cost).
 - Read-modify-write uses optimistic locking: `updateTodo` replaces only if `updatedAt` is unchanged,
   else 409.
 
@@ -225,6 +226,12 @@ export const createTodo = useCase(
 // Read-only use cases are not wrapped and have no ctx.tx
 export const getTodo = useCase('getTodo', async (ctx: GetTodoDeps, id: string) => …);
 ```
+
+The unit of work is an implementation detail of the transaction. Use cases and repositories only see
+the `Transaction` port: `stage`, `afterCommit` and `rollbackOnly`. Behind it, `DynamoTransaction`
+(`data/transaction.ts`) collects the staged writes and submits them in one call through
+`DynamoClient.writeAtomically()`, because that is what a DynamoDB transaction is. `commit()` exists
+only on `DynamoTransaction`, and only `useTransaction()` calls it, on the transaction it began.
 
 **Pros**
 

@@ -53,7 +53,7 @@ module.exports = {
         'Use cases write through repositories. Storage ops (Write, tables, the DynamoDB client) stay in data/, so a use case cannot stage raw writes into a transaction.',
       severity: 'error',
       from: { path: `${src}/features/` },
-      to: { path: `${src}/data/(transaction|dynamo|tables/)` },
+      to: { path: `${src}/data/(write|dynamo|tables/)` },
     },
     {
       name: 'container-is-infrastructure',

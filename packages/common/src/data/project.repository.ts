@@ -3,7 +3,7 @@ import type { Project } from '../domain/project.ts';
 import { ConflictError, NotFoundError } from '../errors.ts';
 import type { RepositoryDeps } from './deps.ts';
 import { projectsTable } from './tables/projects.ts';
-import type { Transaction } from './unit-of-work.ts';
+import type { Transaction } from './transaction.ts';
 
 /** Reads run immediately; writes are staged in the given transaction. */
 export interface ProjectRepository {

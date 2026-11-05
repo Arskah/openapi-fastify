@@ -1,6 +1,6 @@
 import type { CommonConfig } from './config.ts';
 import { createContextLogger } from './context.ts';
-import { createDynamoClient, dataModule, type DynamoClient } from './data/index.ts';
+import { dataModule, DynamoClient } from './data/index.ts';
 import type { Logger } from './logger.ts';
 
 /** Dependencies every module can rely on. */
@@ -22,10 +22,9 @@ export function extend<D extends object, P extends object>(deps: D, module: (dep
 
 /**
  * Process-wide infrastructure: config, logger, DynamoDB client, repositories
- * and the unit-of-work factory. Transactions are not in here: use cases open
- * them with `transaction()`. Use cases are not in here either; they are plain functions
+ * and `beginTransaction`. Use cases are not in here; they are plain functions
  * (see `features/use-case.ts`) that take the container, or the part of it they
- * declare, as their first argument.
+ * declare, as their first argument, and open transactions with `useTransaction()`.
  */
 export type Container<C extends CommonConfig = CommonConfig> = Core<C> &
   ReturnType<typeof dataModule> & { dispose(): void };
@@ -41,7 +40,7 @@ export interface ContainerOptions<C extends CommonConfig> {
 export function createContainer<C extends CommonConfig>({
   config,
   logger,
-  dynamo = createDynamoClient(config),
+  dynamo = new DynamoClient(config),
 }: ContainerOptions<C>): Container<C> {
   // Logs go through the current request's logger when there is one (see context.ts)
   const core: Core<C> = { config, logger: createContextLogger(logger), dynamo };

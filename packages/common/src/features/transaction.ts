@@ -1,8 +1,8 @@
 import type { Container } from '../container.ts';
-import type { Transaction } from '../data/unit-of-work.ts';
+import type { Transaction } from '../data/transaction.ts';
 
 /** What a transactional use case needs besides its repositories. */
-export type TransactionDeps = Pick<Container, 'beginUnitOfWork'>;
+export type TransactionDeps = Pick<Container, 'beginTransaction'>;
 
 /** `ctx` inside a `useTransaction()` use case: repository writes take `ctx.tx`. */
 export type Transactional<D> = D & { tx: Transaction };
@@ -30,9 +30,9 @@ export function useTransaction<D extends TransactionDeps, A extends unknown[], R
       }
     }
 
-    const work = ctx.beginUnitOfWork();
-    const result = await fn({ ...ctx, tx: work }, ...args);
-    await work.commit();
+    const root = ctx.beginTransaction();
+    const result = await fn({ ...ctx, tx: root }, ...args);
+    await root.commit();
     return result;
   };
 }

@@ -3,7 +3,7 @@ import type { Todo } from '../domain/todo.ts';
 import { ConflictError, NotFoundError, ValidationError } from '../errors.ts';
 import type { RepositoryDeps } from './deps.ts';
 import { todosTable } from './tables/todos.ts';
-import type { Transaction } from './unit-of-work.ts';
+import type { Transaction } from './transaction.ts';
 
 /** Reads run immediately; writes are staged in the given transaction. */
 export interface TodoRepository {
