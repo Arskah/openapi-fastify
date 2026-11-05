@@ -195,6 +195,17 @@ itself. With one file per use case, the graph is just `createProject → createT
   never if it fails. Hooks may be async. The commit awaits them one by one, in the order they were
   added, so the use case returns after its side effects. A failing hook is logged, not rethrown,
   because the writes are already committed.
+- Hooks are always awaited; there is no fire-and-forget option, for three reasons:
+  - A synchronous hook such as a log line costs one microtask, so awaiting slows nothing down. Only
+    hooks doing real async work delay the response, and those are the ones that should finish.
+  - Lambda freezes the sandbox once the handler resolves. A hook that is not awaited may run during a
+    later invocation, or never.
+  - Whether a send must arrive is a delivery guarantee. That belongs to the messaging adapter
+    (after commit or outbox, see [Messaging](#messaging-and-transactions-design-not-implemented)), not
+    to a flag at the call site.
+  
+  A background option would only pay off for slow, non-critical work on the server. It would also
+  need its rejections caught, and the pending hooks drained by `dispose()` and by `lambdaHandler`.
 - A transaction with a single write commits it as a plain Put, Update or Delete (half the cost).
 - Read-modify-write uses optimistic locking: `updateTodo` replaces only if `updatedAt` is unchanged,
   else 409.
