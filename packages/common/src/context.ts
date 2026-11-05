@@ -13,10 +13,6 @@ export function runWithContext<T>(context: RequestContext, fn: () => T): T {
   return storage.run(context, fn);
 }
 
-export function getContext(): RequestContext | undefined {
-  return storage.getStore();
-}
-
 const LEVELS = ['trace', 'debug', 'info', 'warn', 'error'] as const;
 
 /**

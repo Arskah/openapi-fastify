@@ -122,6 +122,12 @@ wires them together. Another backend, for example a repository backed by an HTTP
 API has no transactions. Its write methods would not take `tx`, and would run immediately or from
 `afterCommit`. The missing `tx` parameter makes visible that the write is not atomic.
 
+**Public API.** Apps import only `@demo/common`, and `package.json` `exports` blocks deep imports.
+`src/index.ts` names what that includes: config, `createContainer`, `runWithContext`, errors, entity and
+input schemas, and each feature's use cases and schemas (from the feature's `index.ts`). Domain rule
+functions, ports, `useCase`/`useTransaction`, `Deps` types and the DynamoDB integration stay
+internal, so an app cannot bypass a use case or write to DynamoDB directly.
+
 Imports point one way, `features → repositories ← integrations`, with `container` wiring them together and
 `domain` innermost. `pnpm lint:deps` (dependency-cruiser, `.dependency-cruiser.cjs`) enforces it:
 
@@ -671,10 +677,11 @@ can coexist, as two ports, or one port with a per-message choice, since the use 
 
 1. Entities and rules → `domain/`. The port → `repositories/`. Storage → `integrations/dynamo/tables/` +
    `tables/index.ts`, the implementation, `dynamoModule`, and the table name in `config.ts`
-2. `features/<feature>/<useCase>.ts`, exported from the feature's `index.ts` (for apps only). Wrap it in
-   `useTransaction()` if it writes
-3. Re-export from `src/index.ts`. Add the route in `apps/server/src/routes/`, run `pnpm generate`,
-   and add a CLI command
+2. `features/<feature>/<useCase>.ts`. Wrap it in `useTransaction()` if it writes
+3. If apps call it, add it to the feature's `index.ts`, which lists the feature's public API
+   explicitly. `src/index.ts` re-exports the feature barrels and names everything else apps may use;
+   new entity schemas apps need go there. Add the route in `apps/server/src/routes/`, run
+   `pnpm generate`, and add a CLI command
 4. `pnpm check`
 
 ## Dependency policy
