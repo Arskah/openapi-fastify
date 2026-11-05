@@ -1,13 +1,12 @@
-import { Command, InvalidArgumentError } from '@commander-js/extra-typings';
-import { unwrap, type Api } from '../api.ts';
-import { createTodo, deleteTodo, getTodo, listTodos, updateTodo } from '../client/sdk.gen.ts';
-import type { Todo } from '../client/types.gen.ts';
+import { createTodo, deleteTodo, getTodo, listTodos, type Todo, unwrap, updateTodo } from '@demo/api-client';
+import { buildCommand, buildRouteMap } from '@stricli/core';
+import { apiAliases, apiFlags, apiFrom, type ApiFlags, type CliContext } from '../context.ts';
 import { printJson } from '../output.ts';
 
 function parseLimit(value: string): number {
   const limit = Number(value);
   if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
-    throw new InvalidArgumentError('Must be an integer between 1 and 100.');
+    throw new Error('Must be an integer between 1 and 100.');
   }
   return limit;
 }
@@ -16,66 +15,93 @@ function printTodos(todos: Todo[]) {
   console.table(todos.map(({ id, title, done, updatedAt }) => ({ id, title, done, updatedAt })));
 }
 
-export function todosCommand(getApi: () => Api) {
-  const todos = new Command('todos').description('Manage todos');
+const idParameter = { brief: 'Todo id', parse: String, placeholder: 'id' };
 
-  todos
-    .command('list')
-    .description('List todos')
-    .option('-l, --limit <n>', 'page size (1-100)', parseLimit, 20)
-    .option('-c, --cursor <cursor>', 'cursor from a previous page')
-    .option('--json', 'print raw JSON')
-    .action(async ({ limit, cursor, json }) => {
-      const api = getApi();
-      const page = await unwrap(api, listTodos({ client: api.client, query: { limit, cursor } }));
-      if (json) return printJson(page);
-      printTodos(page.items);
-      if (page.nextCursor) console.log(`Next page: --cursor ${page.nextCursor}`);
-    });
+const list = buildCommand({
+  docs: { brief: 'List todos' },
+  parameters: {
+    flags: {
+      ...apiFlags,
+      limit: { kind: 'parsed', parse: parseLimit, brief: 'Page size (1-100)', placeholder: 'n', default: '20' },
+      cursor: { kind: 'parsed', parse: String, brief: 'Cursor from a previous page', optional: true },
+      json: { kind: 'boolean', brief: 'Print raw JSON', default: false },
+    },
+    aliases: { ...apiAliases, l: 'limit', c: 'cursor' },
+  },
+  async func(this: CliContext, flags: ApiFlags & { limit: number; cursor?: string; json: boolean }) {
+    const api = apiFrom(flags);
+    const { limit, cursor } = flags;
+    const page = await unwrap(api, listTodos({ client: api.client, query: { limit, cursor } }));
+    if (flags.json) return printJson(page);
+    printTodos(page.items);
+    if (page.nextCursor) console.log(`Next page: --cursor ${page.nextCursor}`);
+  },
+});
 
-  todos
-    .command('get')
-    .description('Show a todo')
-    .argument('<id>', 'todo id')
-    .action(async (id) => {
-      const api = getApi();
-      printJson(await unwrap(api, getTodo({ client: api.client, path: { id } })));
-    });
+const get = buildCommand({
+  docs: { brief: 'Show a todo' },
+  parameters: {
+    positional: { kind: 'tuple', parameters: [idParameter] },
+    flags: apiFlags,
+    aliases: apiAliases,
+  },
+  async func(this: CliContext, flags: ApiFlags, id: string) {
+    const api = apiFrom(flags);
+    printJson(await unwrap(api, getTodo({ client: api.client, path: { id } })));
+  },
+});
 
-  todos
-    .command('add')
-    .description('Create a todo')
-    .argument('<title>', 'todo title')
-    .option('-d, --description <text>', 'longer description')
-    .action(async (title, { description }) => {
-      const api = getApi();
-      printJson(await unwrap(api, createTodo({ client: api.client, body: { title, description } })));
-    });
+const add = buildCommand({
+  docs: { brief: 'Create a todo' },
+  parameters: {
+    positional: { kind: 'tuple', parameters: [{ brief: 'Todo title', parse: String, placeholder: 'title' }] },
+    flags: {
+      ...apiFlags,
+      description: { kind: 'parsed', parse: String, brief: 'Longer description', placeholder: 'text', optional: true },
+    },
+    aliases: { ...apiAliases, d: 'description' },
+  },
+  async func(this: CliContext, flags: ApiFlags & { description?: string }, title: string) {
+    const api = apiFrom(flags);
+    printJson(await unwrap(api, createTodo({ client: api.client, body: { title, description: flags.description } })));
+  },
+});
 
-  todos
-    .command('update')
-    .description('Update a todo')
-    .argument('<id>', 'todo id')
-    .option('-t, --title <title>', 'new title')
-    .option('-d, --description <text>', 'new description')
-    .option('--done', 'mark as done')
-    .option('--no-done', 'mark as not done')
-    .action(async (id, { title, description, done }) => {
-      const api = getApi();
-      printJson(
-        await unwrap(api, updateTodo({ client: api.client, path: { id }, body: { title, description, done } })),
-      );
-    });
+const update = buildCommand({
+  docs: { brief: 'Update a todo' },
+  parameters: {
+    positional: { kind: 'tuple', parameters: [idParameter] },
+    flags: {
+      ...apiFlags,
+      title: { kind: 'parsed', parse: String, brief: 'New title', optional: true },
+      description: { kind: 'parsed', parse: String, brief: 'New description', placeholder: 'text', optional: true },
+      // Optional boolean: --done / --no-done, omitted leaves it unchanged
+      done: { kind: 'boolean', brief: 'Mark as done (--no-done: not done)', optional: true },
+    },
+    aliases: { ...apiAliases, t: 'title', d: 'description' },
+  },
+  async func(this: CliContext, flags: ApiFlags & { title?: string; description?: string; done?: boolean }, id: string) {
+    const api = apiFrom(flags);
+    const { title, description, done } = flags;
+    printJson(await unwrap(api, updateTodo({ client: api.client, path: { id }, body: { title, description, done } })));
+  },
+});
 
-  todos
-    .command('rm')
-    .description('Delete a todo')
-    .argument('<id>', 'todo id')
-    .action(async (id) => {
-      const api = getApi();
-      await unwrap(api, deleteTodo({ client: api.client, path: { id } }));
-      console.log(`Deleted ${id}`);
-    });
+const rm = buildCommand({
+  docs: { brief: 'Delete a todo' },
+  parameters: {
+    positional: { kind: 'tuple', parameters: [idParameter] },
+    flags: apiFlags,
+    aliases: apiAliases,
+  },
+  async func(this: CliContext, flags: ApiFlags, id: string) {
+    const api = apiFrom(flags);
+    await unwrap(api, deleteTodo({ client: api.client, path: { id } }));
+    console.log(`Deleted ${id}`);
+  },
+});
 
-  return todos;
-}
+export const todosRoutes = buildRouteMap({
+  routes: { list, get, add, update, rm },
+  docs: { brief: 'Manage todos' },
+});

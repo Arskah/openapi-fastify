@@ -11,9 +11,10 @@
     "dev:server": "pnpm --filter @demo/server dev",
     "db:up": "docker compose up -d",
     "db:init": "pnpm --filter @demo/common db:init",
-    "generate": "pnpm --filter @demo/server openapi && pnpm --filter @demo/cli generate",
+    "generate": "pnpm --filter @demo/server openapi && pnpm --filter @demo/api-client generate",
     "cli": "pnpm --filter @demo/cli --silent start",
-    "typecheck": "tsc -p packages/common && tsc -p apps/server && tsc -p apps/cli",
+    "lambda:invoke": "pnpm --filter @demo/lambda --silent invoke",
+    "typecheck": "tsc -p packages/common && tsc -p packages/api-client && tsc -p apps/server && tsc -p apps/cli && tsc -p apps/lambda",
     "lint:deps": "depcruise packages/common/src --config .dependency-cruiser.cjs",
     "check": "pnpm typecheck && pnpm lint:deps"
   },

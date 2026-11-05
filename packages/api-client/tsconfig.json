@@ -1,0 +1,8 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // Generated fetch client references DOM types such as BodyInit
+    "lib": ["es2024", "dom"]
+  },
+  "include": ["src", "*.ts"]
+}

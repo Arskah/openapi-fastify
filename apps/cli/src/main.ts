@@ -1,28 +1,30 @@
 #!/usr/bin/env node
-import { Command, Option } from '@commander-js/extra-typings';
-import { ApiRequestError, createApi } from './api.ts';
-import { projectsCommand } from './commands/projects.ts';
-import { todosCommand } from './commands/todos.ts';
+import { ApiRequestError } from '@demo/api-client';
+import { buildApplication, buildRouteMap, run, text_en } from '@stricli/core';
+import { projectsRoutes } from './commands/projects.ts';
+import { todosRoutes } from './commands/todos.ts';
+import type { CliContext } from './context.ts';
 
-const program = new Command()
-  .name('demo')
-  .description('CLI for the Todos API')
-  .addOption(new Option('--api-url <url>', 'API base URL').env('API_URL').default('http://localhost:3000'))
-  .addOption(new Option('--request-id <id>', 'request ID to send (default: random UUID)').env('REQUEST_ID'))
-  .option('-v, --verbose', 'log requests to stderr');
+const root = buildRouteMap({
+  routes: { todos: todosRoutes, projects: projectsRoutes },
+  docs: { brief: 'CLI for the Todos API' },
+});
 
-const getApi = () => createApi(program.opts());
+const app = buildApplication<CliContext>(root, {
+  name: 'demo',
+  scanner: { caseStyle: 'allow-kebab-for-camel' },
+  localization: {
+    loadText: () => ({
+      ...text_en,
+      // Stack traces are noise for API failures; show the status and the request ID to grep server logs for
+      formatException: (error) =>
+        error instanceof ApiRequestError
+          ? `Error ${error.status}: ${error.message} (request ${error.requestId})`
+          : error instanceof Error
+            ? error.message
+            : String(error),
+    }),
+  },
+});
 
-program.addCommand(todosCommand(getApi));
-program.addCommand(projectsCommand(getApi));
-
-try {
-  await program.parseAsync();
-} catch (error) {
-  if (error instanceof ApiRequestError) {
-    console.error(`Error ${error.status}: ${error.message} (request ${error.requestId})`);
-  } else {
-    console.error(error instanceof Error ? error.message : error);
-  }
-  process.exitCode = 1;
-}
+await run(app, process.argv.slice(2), { process });

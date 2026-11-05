@@ -1,49 +1,68 @@
-import { Command } from '@commander-js/extra-typings';
-import { unwrap, type Api } from '../api.ts';
-import { addProjectTodo, createProject, getProject } from '../client/sdk.gen.ts';
+import { addProjectTodo, createProject, getProject, unwrap } from '@demo/api-client';
+import { buildCommand, buildRouteMap } from '@stricli/core';
+import { apiAliases, apiFlags, apiFrom, type ApiFlags, type CliContext } from '../context.ts';
 import { printJson } from '../output.ts';
 
-export function projectsCommand(getApi: () => Api) {
-  const projects = new Command('projects').description('Manage projects');
+const create = buildCommand({
+  docs: { brief: 'Create a project, optionally with initial todos (created atomically)' },
+  parameters: {
+    positional: { kind: 'tuple', parameters: [{ brief: 'Project name', parse: String, placeholder: 'name' }] },
+    flags: {
+      ...apiFlags,
+      todo: { kind: 'parsed', parse: String, brief: 'Initial todo title (repeatable)', placeholder: 'title', variadic: true, optional: true },
+    },
+    aliases: { ...apiAliases, t: 'todo' },
+  },
+  async func(this: CliContext, flags: ApiFlags & { todo?: string[] }, name: string) {
+    const api = apiFrom(flags);
+    const todos = (flags.todo ?? []).map((title) => ({ title }));
+    printJson(await unwrap(api, createProject({ client: api.client, body: { name, todos } })));
+  },
+});
 
-  projects
-    .command('create')
-    .description('Create a project, optionally with initial todos (created atomically)')
-    .argument('<name>', 'project name')
-    .option('-t, --todo <title...>', 'initial todo titles')
-    .action(async (name, { todo = [] }) => {
-      const api = getApi();
-      const todos = todo.map((title) => ({ title }));
-      printJson(await unwrap(api, createProject({ client: api.client, body: { name, todos } })));
-    });
+const get = buildCommand({
+  docs: { brief: 'Show a project with its todos' },
+  parameters: {
+    positional: { kind: 'tuple', parameters: [{ brief: 'Project id', parse: String, placeholder: 'id' }] },
+    flags: { ...apiFlags, json: { kind: 'boolean', brief: 'Print raw JSON', default: false } },
+    aliases: apiAliases,
+  },
+  async func(this: CliContext, flags: ApiFlags & { json: boolean }, id: string) {
+    const api = apiFrom(flags);
+    const project = await unwrap(api, getProject({ client: api.client, path: { id } }));
+    if (flags.json) return printJson(project);
+    console.log(`${project.name} (${project.id})`);
+    console.table(project.todos.map(({ id, title, done }) => ({ id, title, done })));
+  },
+});
 
-  projects
-    .command('get')
-    .description('Show a project with its todos')
-    .argument('<id>', 'project id')
-    .option('--json', 'print raw JSON')
-    .action(async (id, { json }) => {
-      const api = getApi();
-      const project = await unwrap(api, getProject({ client: api.client, path: { id } }));
-      if (json) return printJson(project);
-      console.log(`${project.name} (${project.id})`);
-      console.table(project.todos.map(({ id, title, done }) => ({ id, title, done })));
-    });
+const addTodo = buildCommand({
+  docs: { brief: 'Create a todo in a project' },
+  parameters: {
+    positional: {
+      kind: 'tuple',
+      parameters: [
+        { brief: 'Project id', parse: String, placeholder: 'id' },
+        { brief: 'Todo title', parse: String, placeholder: 'title' },
+      ],
+    },
+    flags: {
+      ...apiFlags,
+      description: { kind: 'parsed', parse: String, brief: 'Longer description', placeholder: 'text', optional: true },
+    },
+    aliases: { ...apiAliases, d: 'description' },
+  },
+  async func(this: CliContext, flags: ApiFlags & { description?: string }, id: string, title: string) {
+    const api = apiFrom(flags);
+    const { todo } = await unwrap(
+      api,
+      addProjectTodo({ client: api.client, path: { id }, body: { title, description: flags.description } }),
+    );
+    printJson(todo);
+  },
+});
 
-  projects
-    .command('add-todo')
-    .description('Create a todo in a project')
-    .argument('<id>', 'project id')
-    .argument('<title>', 'todo title')
-    .option('-d, --description <text>', 'longer description')
-    .action(async (id, title, { description }) => {
-      const api = getApi();
-      const { todo } = await unwrap(
-        api,
-        addProjectTodo({ client: api.client, path: { id }, body: { title, description } }),
-      );
-      printJson(todo);
-    });
-
-  return projects;
-}
+export const projectsRoutes = buildRouteMap({
+  routes: { create, get, 'add-todo': addTodo },
+  docs: { brief: 'Manage projects' },
+});
