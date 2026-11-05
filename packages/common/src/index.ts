@@ -6,5 +6,6 @@ export * from './domain/index.ts';
 export * from './errors.ts';
 export * from './features/projects/index.ts';
 export * from './features/todos/index.ts';
+export * from './features/transaction.ts';
 export * from './features/use-case.ts';
 export type { Logger, LogFn } from './logger.ts';

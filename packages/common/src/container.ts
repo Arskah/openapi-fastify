@@ -22,7 +22,8 @@ export function extend<D extends object, P extends object>(deps: D, module: (dep
 
 /**
  * Process-wide infrastructure: config, logger, DynamoDB client, repositories
- * and the unit of work. Use cases are not in here; they are plain functions
+ * and the unit-of-work factory. Transactions are not in here: use cases open
+ * them with `transaction()`. Use cases are not in here either; they are plain functions
  * (see `features/use-case.ts`) that take the container, or the part of it they
  * declare, as their first argument.
  */

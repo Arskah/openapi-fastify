@@ -43,7 +43,7 @@ pnpm generate   # writes apps/server/openapi.json, then regenerates packages/api
 
 **Container.** `createContainer({ config, logger })` in `packages/common/src/container.ts` builds
 the process-wide infrastructure once: config, context logger, DynamoDB client, repositories and the
-unit of work. Use cases are not in it (see [Use cases](#use-cases)). Modules compose with
+unit-of-work factory. Use cases are not in it (see [Use cases](#use-cases)). Modules compose with
 `extend()`, and each module's parameter type is checked against what is already provided.
 
 **Request-scoped logging.** The server derives a request ID from the `x-request-id` header,
@@ -98,12 +98,13 @@ packages/common/src/
   domain/            ids.ts, todo.ts, project.ts: branded entities + rules (newTodo, applyTodoUpdate, newProject, withTodos)
   data/
     tables/          storage format per table: definition, key, item mapping, write ops (no I/O)
-    unit-of-work.ts  stages writes; commits them in one TransactWriteItems at the outermost use case
+    unit-of-work.ts  a unit of work: collects staged writes, commits them in one TransactWriteItems
     transaction.ts   commitWrites(): failed condition → the error chosen by whoever staged the write
-    *.repository.ts  one per table; reads run immediately, writes are staged
-  container.ts       infrastructure only: config, logger, dynamo, repositories, unitOfWork
+    *.repository.ts  one per table; reads run immediately, writes take a Transaction and stage into it
+  container.ts       infrastructure only: config, logger, dynamo, repositories, beginUnitOfWork
   features/
     use-case.ts      useCase() helper
+    transaction.ts   useTransaction(): declares a use case transactional
     todos/, projects/  one use case per file
 ```
 
@@ -116,6 +117,7 @@ Imports point one way, `features → container → data → domain`. `pnpm lint:
 | `no-cross-feature-barrels` | Import `../todos/createTodo.ts`, not `../todos/index.ts`. A barrel drags in the whole feature, which turns an acyclic graph of use cases into cyclic features. |
 | `container-is-infrastructure` | The container and data layer never import use cases. |
 | `repositories-independent` | Repositories never use each other; atomicity comes from the unit of work. |
+| `features-without-storage` | Use cases write through repositories, never by staging raw DynamoDB ops. |
 | `tables-without-io`, `domain-is-innermost`, `data-below-container` | Keep the direction one-way. |
 
 ## Use cases
@@ -127,22 +129,36 @@ container it needs, and apps call it directly:
 // features/projects/createProject.ts
 export type CreateProjectDeps = CreateTodoDeps & Pick<Container, 'projectRepository'>;
 
-export const createProject = useCase('createProject', async (ctx: CreateProjectDeps, input: CreateProjectInput) => {
-  const project = newProject(input, now);
-  const todos = await Promise.all(input.todos.map((t) => createTodo(ctx, t, { projectId: project.id })));
-  ctx.projectRepository.create(withTodos(project, todos.map((t) => t.id), now));
-  afterCommit(() => ctx.logger.info({ id: project.id }, 'project created'));
-  return toProjectDetails(project, todos);
-});
+export const createProject = useCase(
+  'createProject',
+  useTransaction(async (ctx: Transactional<CreateProjectDeps>, input: CreateProjectInput) => {
+    const project = newProject(input, now);
+    const todos = await Promise.all(input.todos.map((t) => createTodo(ctx, t, { projectId: project.id })));
+    ctx.projectRepository.create(ctx.tx, withTodos(project, todos.map((t) => t.id), now));
+    ctx.tx.afterCommit(() => ctx.logger.info({ id: project.id }, 'project created'));
+    return toProjectDetails(project, todos);
+  }),
+);
 
 // apps/server
 (request) => createProject(container, request.body)
 ```
 
-**Composition.** `useCase()` runs the function in a unit of work (AsyncLocalStorage). Called from a
-route, it opens one and commits at the end. Called from another use case, it joins the caller's
-unit of work. So `createProject` → `createTodo` ×N is one transaction, and so is
-`deleteTodo` → `detachTodoFromProject`.
+**Transactions are business logic.** Which writes must succeed together is a use case's decision, so
+a use case that writes is declared with `useTransaction()` (`features/transaction.ts`), and its body
+gets `ctx: Transactional<Deps>`, which carries `ctx.tx`. Repositories only translate between the domain
+and DynamoDB. Their write methods take `ctx.tx` and stage into it, and they never open, join or
+commit a transaction. A read-only use case (`getTodo`, `listTodos`, `getProject`) has no `ctx.tx`, so a
+write there does not compile. Raw storage ops (`Write`, `tables/`, the DynamoDB client) cannot be
+imported into `features/` (`features-without-storage`), so writes always go through a repository. Why this
+design, its caveats, and the alternatives: [Transactions: design options](#transactions-design-options).
+
+**Composition.** A transactional use case called with a `ctx` that already carries `tx` joins that
+transaction, and only the outermost one commits. So `createProject` → `createTodo` ×N is one
+transaction, and so is `deleteTodo` → `detachTodoFromProject`. If a joined use case throws, the
+transaction becomes rollback-only. A caller that catches the error still cannot commit the callee's
+half-staged writes; its commit fails instead. A non-transactional use case that calls two
+transactional ones makes two separate commits.
 
 **Dependencies are type-checked.** A caller's deps must include its callees' deps
 (`CreateProjectDeps = CreateTodoDeps & …`). Dropping `todoRepository` from it fails to compile.
@@ -158,8 +174,8 @@ itself. With one file per use case, the graph is just `createProject → createT
 - Staged writes are invisible to reads in the same use case. Express preconditions as conditions
   (`attribute_exists`, `updatedAt = :expected`, `todoIds[i] = :id`), not read-then-check alone.
 - Writes return nothing. Return the domain object you built (`withTodos(project, …)`), or re-read.
-- At most one write per item and 100 writes per unit of work; `stageWrite` throws early otherwise.
-- Side effects (logs, events) go in `afterCommit`, which runs once after the outermost commit and
+- At most one write per item and 100 writes per transaction; staging throws early otherwise.
+- Side effects (logs, events) go in `ctx.tx.afterCommit`, which runs once after the outermost commit and
   never if it fails.
 - A unit of work with a single write commits it without a transaction.
 - Read-modify-write uses optimistic locking: `updateTodo` replaces only if `updatedAt` is unchanged,
@@ -172,11 +188,205 @@ that skipped the rules.
 **Testing.** Pass a fake `ctx` containing only what the use case declares. A composed use case calls
 the real callee, so fake at the repository boundary.
 
+## Transactions: design options
+
+How transactions and repositories fit together is the main design question in this repo. The
+starting principle:
+
+> **Transactions are business logic. Repositories abstract the integration.** Which writes must
+> succeed together is a use case's decision. A repository only translates between domain objects
+> and DynamoDB: keys, item mapping, condition expressions, and mapping a failed condition to a domain
+> error.
+
+DynamoDB constrains every option. `TransactWriteItems` is a batch of up to 100 writes, at most one
+per item, submitted in a single call. A transaction is not interactive: there are no reads in it,
+nothing reads its own writes, and nothing is locked while code runs. Invariants are expressed as
+conditions on the writes.
+
+The three designs that best fit the principle are below, followed by the others considered and a
+comparison.
+
+### Option 3: `useTransaction()` wrapper (implemented)
+
+A use case that writes is declared transactional. Its body receives `ctx.tx`, and repository writes
+take it as an argument:
+
+```ts
+export const createTodo = useCase(
+  'createTodo',
+  useTransaction(async (ctx: Transactional<CreateTodoDeps>, input: CreateTodoInput) => {
+    const todo = newTodo(input, new Date());
+    ctx.todoRepository.create(ctx.tx, todo);   // staged; the repository builds the op and its error mapping
+    ctx.tx.afterCommit(() => ctx.logger.info({ id: todo.id }, 'todo created'));
+    return todo;
+  }),
+);
+
+// Read-only use cases are not wrapped and have no ctx.tx
+export const getTodo = useCase('getTodo', async (ctx: GetTodoDeps, id: string) => …);
+```
+
+**Pros**
+
+- The use case owns the boundary, and says so where it is defined.
+- Strictness is checked by the compiler:
+  - A write in a read-only use case fails with `Property 'tx' does not exist`.
+  - A `Transactional<…>` body that is not wrapped cannot be called with the container.
+  - `features-without-storage` stops use cases importing `Write`, `tables/` or the DynamoDB client,
+    so they cannot stage raw ops.
+- Composition is atomic and type-checked. A transactional callee given a `ctx` that carries `tx` joins
+  that transaction, and only the outermost one commits (`createProject` → `createTodo` ×N).
+- Rollback-only: if a joined callee throws and the caller swallows the error, the outer commit fails.
+  Half-staged writes never commit.
+- Repositories stay pure adapters. Business code never sees a DynamoDB type, and there is no ambient
+  state; `ctx.tx` is passed explicitly.
+- Testing is easy: a fake `tx` records the staged writes.
+
+**Cons and caveats**
+
+- **The body looks like a SQL transaction, but it is not one.** Reads inside it (`getTodo` in
+  `updateTodo`) are not transactional: there is no snapshot, they do not see staged writes, and
+  nothing is locked. Consistency comes only from write conditions (`updatedAt = :expected`,
+  `attribute_exists`). Read, check in code, then write is not safe on its own.
+- **Errors appear at the outermost commit.** Conditions are evaluated when the outermost transaction
+  commits. A callee cannot catch its own "already exists", so the error comes out of the use case
+  that opened the transaction.
+- **A callee's limits are shared with its callers.** The 100-write and one-write-per-item limits
+  apply to everything joined. `MAX_INITIAL_TODOS = 50` keeps `createProject` under 100, an implicit
+  coupling. Two joined use cases that write the same item throw at stage time.
+- **Joining is always on.** A callee cannot ask for its own transaction (Spring's `REQUIRES_NEW`).
+  For example, an audit write that survives the outer transaction failing is not possible.
+- **Non-transactional callers commit piecemeal, without any warning.** A non-transactional use case
+  that calls two transactional ones makes two commits, so partial failure is possible. The types
+  cannot tell this apart from a deliberate choice.
+- **Rollback-only also blocks legitimate recovery.** "Try X, else Y" inside one transaction is
+  impossible. With DynamoDB this rarely matters, because condition failures only appear at commit.
+- **Floating promises.** A callee that is not awaited may stage after the commit (it throws) or race
+  it. Await every use case.
+- **`afterCommit` is not durable.** A crash after the commit loses the hook. It is fine for logs;
+  events need an outbox (an item written in the same transaction) or DynamoDB Streams.
+- **Retries are not idempotent.** SQS delivers at least once. If `createTodo` commits and the
+  invocation then fails, the redelivered message creates a second todo with a new ID. That needs an
+  idempotency key, such as deriving the ID from the message ID or writing a guard item in the same
+  transaction.
+
+### Option 4: labelled ops and `transact()`
+
+Repositories are modules of pure functions that return DynamoDB ops. The use case submits them as a
+labelled record and maps the outcome itself. The client comes from ambient context, and there is no
+container. In Fowler's terms, this is a Transaction Script over Table Data Gateways, with writes as
+data:
+
+```ts
+import * as projects from '../gateways/projects';
+import * as todos from '../gateways/todos';
+import { transact } from '../gateways/transaction';
+
+export const addTodoToProject = async (projectId: string, input: CreateTodoInput): Promise<AddOutcome> => {
+  const todo = newTodo(input, new Date(), { projectId });
+  const result = await transact({
+    todo: todos.create(todo), // returns { Put: … } and does no I/O
+    append: projects.appendTodo(projectId, todo.id), // condition: the project exists
+  });
+  if (result.kind === 'committed') return { added: todo };
+  if (result.kind === 'conflict') return 'conflict'; // TransactionConflict, retryable
+  if (result.items.has('append')) return 'projectMissing'; // labels are typed: keyof the record
+  throw new Error(`failed on ${[...result.items].join(', ')}`); // a fresh todo ID cannot collide
+};
+```
+
+`transact` turns the record into `TransactItems`, keeping key order. On cancellation it maps
+`CancellationReasons`, which line up with the items by index, back to the labels.
+
+**Pros**
+
+- Most explicit: one call is one transaction, and every write is visible in one place.
+- The use case decides what a failed condition means. The same gateway op can mean different things in
+  different use cases.
+- Expected failures are typed return values, not exceptions.
+- No staging, joining, hooks or rollback-only rules. Code after `transact` runs only if the commit
+  succeeded.
+- Honest about DynamoDB: build the batch, then submit it.
+- Gateways can be tested without I/O, and plain imports need no wiring.
+
+**Cons**
+
+- DynamoDB op types flow through business code, so the repository no longer hides the integration.
+- Composition is manual. A use case cannot call another writing use case; the shared part has to
+  become an op builder whose ops the caller spreads into its own record.
+- Dynamic write sets (a project plus N todos) need generated labels (`todo:0`…), and the typed
+  `items.has(…)` weakens to `string`.
+- The duplicate-item check and the 100-op limit are left to each call site.
+- The ambient client is a hidden dependency. Tests need module mocks, imports hard-wire the
+  implementation, and the config each gateway needs is not in any signature.
+
+### Option 5: hybrid, container plus labelled ops
+
+Option 4's `transact`, but with repositories from the container (`ctx.transact({ todo:
+ctx.todoRepository.create(todo) })`). Reads return domain objects, and writes return labelled ops.
+
+**Pros**
+
+- Option 4's explicit, typed error handling.
+- Keeps the type-checked dependencies (`Pick<Container, …>`) and fakes passed in.
+
+**Cons**
+
+- Repositories return two kinds of things: domain objects from reads and DynamoDB ops from writes.
+  Storage still leaks into the use case, which then has to know the one-write-per-item rule, the
+  100-op limit and label mapping.
+- Composition is still manual, as in option 4.
+
+This is why option 3 was chosen over 4 and 5. Only option 3 keeps both halves of the principle: the
+use case owns the boundary, and only the repository knows DynamoDB.
+
+### Other options considered
+
+- **1. Ambient unit of work per use case** (this repo's previous design). Every `useCase()` silently
+  opens or joins a unit of work in AsyncLocalStorage, and repositories call a global `stageWrite()`.
+  It is the least code and composes automatically. But the boundary is a framework rule, not a
+  business decision. Repositories depend on hidden module state, and a missing wrapper only fails at
+  runtime. The pattern in [this article](https://wempe.dev/blog/nodejs-async-local-storage-context)
+  is the same, except that outside a transaction it falls back to plain `db` and auto-commits.
+- **2. `transaction(ctx, async (ctx) => …)` inside the body.** It has the same type safety as option 3,
+  and lets a use case read before the transaction or run two of them. But it depends on shadowing
+  `ctx`: passing the outer one to a callee silently opens a separate, non-atomic transaction.
+- **6. One aggregate per transaction plus events** (Vernon's rule). Each use case writes one
+  aggregate, and cross-aggregate effects such as detaching a deleted todo run from DynamoDB Streams
+  in a Lambda. Transactions are the smallest and cheapest, events are durable, and it scales. The
+  cost is eventual consistency, idempotent handlers and more infrastructure.
+- **7. A library or another store.** ElectroDB or dynamodb-toolbox give typed entities and explicit
+  transaction lists. Postgres with Drizzle or Kysely has interactive transactions with read-your-writes.
+  Option 3 maps onto those directly, and its first caveat goes away.
+
+### Comparison
+
+| | Boundary owned by use case | Writing outside a transaction | Atomic composition | Storage hidden from business code | Failed condition means… decided by |
+|---|---|---|---|---|---|
+| 1 Ambient per use case | ✗ framework | fails at runtime | ✓ implicit | ✓ | repository |
+| 2 `transaction()` in body | ✓ | fails to compile | ✓ by convention | ✓ | repository |
+| **3 `useTransaction()`** | ✓ at definition | fails to compile | ✓ enforced | ✓ | repository |
+| 4 Labelled ops | ✓ | n/a | ✗ manual | ✗ | use case |
+| 5 Hybrid | ✓ | n/a | ✗ manual | ✗ partly | use case |
+| 6 Aggregate + events | ✓ | n/a | via events | ✓ | each handler |
+
+### Further reading
+
+- Martin Fowler, *Patterns of Enterprise Application Architecture* (2002): Unit of Work, Repository,
+  Table Data Gateway, Transaction Script. <https://martinfowler.com/eaaCatalog/unitOfWork.html>
+- Harry Percival and Bob Gregory, *Architecture Patterns with Python*, chapter 6: an explicit unit of
+  work owned by the service layer. <https://www.cosmicpython.com/book/chapter_06_uow.html>
+- Vaughn Vernon, *Effective Aggregate Design* (2011), and Pat Helland, *Life beyond Distributed
+  Transactions* (2007): one aggregate per transaction.
+- Chris Richardson, Transactional Outbox. <https://microservices.io/patterns/data/transactional-outbox.html>
+- Alex DeBrie, *The DynamoDB Book*: transactions, condition expressions, uniqueness-guard items.
+
 ## Adding a use case or feature
 
 1. Entities and rules → `domain/`. Storage → `data/tables/` + `tables/index.ts`, a repository,
    `dataModule`, and the table name in `config.ts`
-2. `features/<feature>/<useCase>.ts`, exported from the feature's `index.ts` (for apps only)
+2. `features/<feature>/<useCase>.ts`, exported from the feature's `index.ts` (for apps only). Wrap it in
+   `useTransaction()` if it writes
 3. Re-export from `src/index.ts`. Add the route in `apps/server/src/routes/`, run `pnpm generate`,
    and add a CLI command
 4. `pnpm check`

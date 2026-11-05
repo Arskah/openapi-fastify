@@ -3,17 +3,17 @@ import type { Project } from '../domain/project.ts';
 import { ConflictError, NotFoundError } from '../errors.ts';
 import type { RepositoryDeps } from './deps.ts';
 import { projectsTable } from './tables/projects.ts';
-import { stageWrite } from './unit-of-work.ts';
+import type { Transaction } from './unit-of-work.ts';
 
-/** Reads run immediately; writes are staged in the current unit of work. */
+/** Reads run immediately; writes are staged in the given transaction. */
 export interface ProjectRepository {
   /** `consistent` reads see writes committed just before. */
   get(id: string, options?: { consistent?: boolean }): Promise<Project | undefined>;
-  create(project: Project): void;
+  create(tx: Transaction, project: Project): void;
   /** Atomic append; NotFoundError on commit if the project does not exist. */
-  appendTodos(id: string, todoIds: readonly string[], updatedAt: string): void;
+  appendTodos(tx: Transaction, id: string, todoIds: readonly string[], updatedAt: string): void;
   /** Removes `todoId` found at `index`; ConflictError on commit if the list changed meanwhile. */
-  removeTodoAt(id: string, index: number, todoId: string, updatedAt: string): void;
+  removeTodoAt(tx: Transaction, id: string, index: number, todoId: string, updatedAt: string): void;
 }
 
 export function createProjectRepository({ config, logger, dynamo }: RepositoryDeps): ProjectRepository {
@@ -29,27 +29,27 @@ export function createProjectRepository({ config, logger, dynamo }: RepositoryDe
       return Item && table.fromItem(Item);
     },
 
-    create(project) {
+    create(tx, project) {
       log.debug({ id: project.id }, 'stage insert project');
-      stageWrite({
+      tx.stage({
         op: table.insert(project),
         item: table.item(project.id),
         onConditionFailed: () => new ConflictError(`Project '${project.id}' already exists`),
       });
     },
 
-    appendTodos(id, todoIds, updatedAt) {
+    appendTodos(tx, id, todoIds, updatedAt) {
       log.debug({ id, todoIds }, 'stage append todos to project');
-      stageWrite({
+      tx.stage({
         op: table.appendTodos(id, todoIds, updatedAt),
         item: table.item(id),
         onConditionFailed: () => new NotFoundError('Project', id),
       });
     },
 
-    removeTodoAt(id, index, todoId, updatedAt) {
+    removeTodoAt(tx, id, index, todoId, updatedAt) {
       log.debug({ id, index, todoId }, 'stage remove todo from project');
-      stageWrite({
+      tx.stage({
         op: table.removeTodoAt(id, index, todoId, updatedAt),
         item: table.item(id),
         onConditionFailed: () => new ConflictError(`Project '${id}' changed concurrently; retry`),

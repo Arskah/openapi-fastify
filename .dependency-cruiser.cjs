@@ -48,6 +48,14 @@ module.exports = {
       to: { path: `${src}/features/[^/]+/index\\.ts$`, pathNot: `${src}/features/$1/` },
     },
     {
+      name: 'features-without-storage',
+      comment:
+        'Use cases write through repositories. Storage ops (Write, tables, the DynamoDB client) stay in data/, so a use case cannot stage raw writes into a transaction.',
+      severity: 'error',
+      from: { path: `${src}/features/` },
+      to: { path: `${src}/data/(transaction|dynamo|tables/)` },
+    },
+    {
       name: 'container-is-infrastructure',
       comment: 'The container wires infrastructure only; use cases are plain functions that receive it.',
       severity: 'error',
