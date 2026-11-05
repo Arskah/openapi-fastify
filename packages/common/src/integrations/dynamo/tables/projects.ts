@@ -1,6 +1,6 @@
 // Storage format of projects. No I/O.
-import type { CommonConfig } from '../../config.ts';
-import { ProjectSchema, type Project } from '../../domain/project.ts';
+import type { CommonConfig } from '../../../config.ts';
+import { ProjectSchema, type Project } from '../../../domain/project.ts';
 import type { WriteOp } from '../write.ts';
 import type { TableDefinition } from './table.ts';
 

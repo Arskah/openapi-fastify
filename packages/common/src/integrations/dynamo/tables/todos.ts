@@ -1,6 +1,6 @@
 // Storage format of todos. No I/O.
-import type { CommonConfig } from '../../config.ts';
-import { TodoSchema, type Todo } from '../../domain/todo.ts';
+import type { CommonConfig } from '../../../config.ts';
+import { TodoSchema, type Todo } from '../../../domain/todo.ts';
 import type { WriteOp } from '../write.ts';
 import type { TableDefinition } from './table.ts';
 

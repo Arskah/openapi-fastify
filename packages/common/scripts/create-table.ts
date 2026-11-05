@@ -2,7 +2,7 @@
 import { setTimeout as sleep } from 'node:timers/promises';
 import { CreateTableCommand, DynamoDBClient, ResourceInUseException } from '@aws-sdk/client-dynamodb';
 import { loadCommonConfig } from '../src/config.ts';
-import { tables } from '../src/data/tables/index.ts';
+import { tables } from '../src/integrations/dynamo/tables/index.ts';
 
 const config = loadCommonConfig();
 const client = new DynamoDBClient({

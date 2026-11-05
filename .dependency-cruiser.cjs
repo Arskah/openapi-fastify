@@ -1,4 +1,6 @@
-// Layering rules for packages/common: domain ← data ← container ← features (use cases).
+// Layering rules for packages/common:
+//   domain ← repositories (ports) ← integrations (adapters) ← container ← features (use cases)
+// Use cases depend on ports, never on an integration.
 const src = '^packages/common/src';
 
 /** @type {import('dependency-cruiser').IConfiguration} */
@@ -15,29 +17,54 @@ module.exports = {
       comment: 'Domain types and rules must not know about storage, use cases or wiring.',
       severity: 'error',
       from: { path: `${src}/domain/` },
-      to: { path: `${src}/(data|features|container|context)` },
+      to: { path: `${src}/(repositories|integrations|features|container|context)` },
     },
     {
-      name: 'data-below-container',
-      comment: 'The data layer is wired by the container; it must not depend on it.',
+      name: 'ports-are-abstract',
+      comment: 'repositories/ holds interfaces only: no integration, wiring or use case behind them.',
       severity: 'error',
-      from: { path: `${src}/data/` },
+      from: { path: `${src}/repositories/` },
+      to: { path: `${src}/(integrations|features|container)` },
+    },
+    {
+      name: 'features-use-ports',
+      comment:
+        'Use cases depend on repositories/ (ports), never on an integration. Storage ops, clients and tables stay behind the port, so a use case cannot stage raw writes.',
+      severity: 'error',
+      from: { path: `${src}/features/` },
+      to: { path: `${src}/integrations/` },
+    },
+    {
+      name: 'integrations-independent',
+      comment: 'Each integration (dynamo/, http/, …) stands alone; the container combines them.',
+      severity: 'error',
+      from: { path: `${src}/integrations/([^/]+)/` },
+      to: { path: `${src}/integrations/`, pathNot: `${src}/integrations/$1/` },
+    },
+    {
+      name: 'integrations-below-container',
+      comment: 'Integrations are wired by the container; they must not depend on it.',
+      severity: 'error',
+      from: { path: `${src}/integrations/` },
       to: { path: `${src}/container` },
     },
     {
       name: 'repositories-independent',
       comment:
-        'Repositories must not use each other (a cycle is one feature away). Share storage details through data/tables/ instead.',
+        'Repository implementations must not use each other (a cycle is one feature away). Share storage details through tables/ instead.',
       severity: 'error',
-      from: { path: `${src}/data/[^/]+\\.repository\\.ts$` },
-      to: { path: `${src}/data/[^/]+\\.repository\\.ts$` },
+      from: { path: `${src}/integrations/.+\\.repository\\.ts$` },
+      to: { path: `${src}/integrations/.+\\.repository\\.ts$` },
     },
     {
       name: 'tables-without-io',
       comment: 'Table modules describe storage (keys, mapping, write ops); repositories do the I/O.',
       severity: 'error',
-      from: { path: `${src}/data/tables/` },
-      to: { path: `(${src}/data/(dynamo|[^/]+\\.repository)\\.ts$|@aws-sdk/lib-dynamodb)`, dependencyTypesNot: ['type-only'] },
+      from: { path: `${src}/integrations/dynamo/tables/` },
+      to: {
+        path: `(${src}/integrations/dynamo/(client|[^/]+\\.repository)\\.ts$|@aws-sdk/lib-dynamodb)`,
+        dependencyTypesNot: ['type-only'],
+      },
     },
     {
       name: 'no-cross-feature-barrels',
@@ -48,18 +75,10 @@ module.exports = {
       to: { path: `${src}/features/[^/]+/index\\.ts$`, pathNot: `${src}/features/$1/` },
     },
     {
-      name: 'features-without-storage',
-      comment:
-        'Use cases write through repositories. Storage ops (Write, tables, the DynamoDB client) stay in data/, so a use case cannot stage raw writes into a transaction.',
-      severity: 'error',
-      from: { path: `${src}/features/` },
-      to: { path: `${src}/data/(write|dynamo|tables/)` },
-    },
-    {
       name: 'container-is-infrastructure',
-      comment: 'The container wires infrastructure only; use cases are plain functions that receive it.',
+      comment: 'The container, ports and integrations never import use cases.',
       severity: 'error',
-      from: { path: `${src}/(container|data/)` },
+      from: { path: `${src}/(container|repositories/|integrations/)` },
       to: { path: `${src}/features/` },
     },
   ],

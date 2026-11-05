@@ -5,7 +5,7 @@ generated from that spec, and business logic in a shared package wired through a
 dependency container. The server and an SQS Lambda both consume that package.
 
 ```
-packages/common      business logic, no HTTP: domain/, data/ (DynamoDB), features/ (use cases), container
+packages/common      business logic, no HTTP: domain/, repositories/ (ports), integrations/ (DynamoDB), features/ (use cases), container
 packages/api-client  @hey-api/openapi-ts fetch client generated from apps/server/openapi.json, request-ID helpers
 apps/server          Fastify 5 + fastify-type-provider-zod + @fastify/swagger, pino with request IDs
 apps/cli             Stricli CLI over @demo/api-client
@@ -95,31 +95,44 @@ whose type parameter keeps the extended config typed on `container.config`.
 
 ```
 packages/common/src/
-  domain/            ids.ts, todo.ts, project.ts: branded entities + rules (newTodo, applyTodoUpdate, newProject, withTodos)
-  data/
-    tables/          storage format per table: definition, key, item mapping, write ops (no I/O)
-    dynamo.ts        DynamoClient: send() for reads, writeAtomically() (failed condition → the writer's error)
-    transaction.ts   Transaction port + DynamoTransaction: stages writes, commits them in one call
-    write.ts         Write / WriteOp: storage ops built by tables/, never seen by features/
-    *.repository.ts  one per table; reads run immediately, writes take a Transaction and stage into it
-  container.ts       infrastructure only: config, logger, dynamo, repositories, beginTransaction
+  domain/              ids.ts, todo.ts, project.ts: branded entities + rules (newTodo, applyTodoUpdate, newProject, withTodos)
+  repositories/        ports: what use cases depend on (interfaces only)
+    todo.repository.ts, project.repository.ts
+    transaction.ts     Transaction (afterCommit, rollbackOnly) and RootTransaction (+ commit)
+  integrations/        adapters: one directory per external system
+    dynamo/
+      client.ts        DynamoClient: send() for reads, writeAtomically() (failed condition → the writer's error)
+      transaction.ts   DynamoTransaction: stages writes, commits them in one call
+      write.ts         Write / WriteOp: storage ops built by tables/
+      tables/          storage format per table: definition, key, item mapping, write ops (no I/O)
+      *.repository.ts  implement the ports; reads run immediately, writes stage into the transaction
+  container.ts         infrastructure only: config, logger, dynamo, repositories, beginTransaction
   features/
-    use-case.ts      useCase() helper
-    transaction.ts   useTransaction(): declares a use case transactional
+    use-case.ts        useCase() helper
+    transaction.ts     useTransaction(): declares a use case transactional
     todos/, projects/  one use case per file
 ```
 
-Imports point one way, `features → container → data → domain`. `pnpm lint:deps`
-(dependency-cruiser, `.dependency-cruiser.cjs`) enforces it:
+This is ports and adapters (hexagonal architecture). Use cases depend on the interfaces in
+`repositories/`. `integrations/` implements them, one directory per external system, and the container
+wires them together. Another backend, for example a repository backed by an HTTP API in
+`integrations/http/`, implements the same port without any change to the use cases. One caveat: an HTTP
+API has no transactions. Its write methods would not take `tx`, and would run immediately or from
+`afterCommit`. The missing `tx` parameter makes visible that the write is not atomic.
+
+Imports point one way, `features → repositories ← integrations`, with `container` wiring them together and
+`domain` innermost. `pnpm lint:deps` (dependency-cruiser, `.dependency-cruiser.cjs`) enforces it:
 
 | Rule | Why |
 |---|---|
 | `no-circular` | Use cases may call use cases in other features, but the graph must stay acyclic. |
 | `no-cross-feature-barrels` | Import `../todos/createTodo.ts`, not `../todos/index.ts`. A barrel drags in the whole feature, which turns an acyclic graph of use cases into cyclic features. |
-| `container-is-infrastructure` | The container and data layer never import use cases. |
-| `repositories-independent` | Repositories never use each other; atomicity comes from the use case's transaction. |
-| `features-without-storage` | Use cases write through repositories, never by staging raw DynamoDB ops. |
-| `tables-without-io`, `domain-is-innermost`, `data-below-container` | Keep the direction one-way. |
+| `features-use-ports` | Use cases import ports, never `integrations/`. Storage ops, clients and tables stay behind the port, so a use case cannot stage raw DynamoDB writes. |
+| `ports-are-abstract` | `repositories/` depends on nothing but `domain/`. |
+| `integrations-independent` | Each integration stands alone; the container combines them. |
+| `repositories-independent` | Repository implementations never use each other; atomicity comes from the use case's transaction. |
+| `container-is-infrastructure` | The container, ports and integrations never import use cases. |
+| `tables-without-io`, `domain-is-innermost`, `integrations-below-container` | Keep the direction one-way. |
 
 ## Use cases
 
@@ -150,8 +163,8 @@ a use case that writes is declared with `useTransaction()` (`features/transactio
 gets `ctx: Transactional<Deps>`, which carries `ctx.tx`. Repositories only translate between the domain
 and DynamoDB. Their write methods take `ctx.tx` and stage into it, and they never open, join or
 commit a transaction. A read-only use case (`getTodo`, `listTodos`, `getProject`) has no `ctx.tx`, so a
-write there does not compile. Raw storage ops (`Write`, `tables/`, the DynamoDB client) cannot be
-imported into `features/` (`features-without-storage`), so writes always go through a repository. Why this
+write there does not compile. Nothing in `integrations/` can be imported into `features/`
+(`features-use-ports`), so writes always go through a repository. Why this
 design, its caveats, and the alternatives: [Transactions: design options](#transactions-design-options).
 
 **Composition.** A transactional use case called with a `ctx` that already carries `tx` joins that
@@ -228,10 +241,12 @@ export const getTodo = useCase('getTodo', async (ctx: GetTodoDeps, id: string) =
 ```
 
 The unit of work is an implementation detail of the transaction. Use cases and repositories only see
-the `Transaction` port: `stage`, `afterCommit` and `rollbackOnly`. Behind it, `DynamoTransaction`
-(`data/transaction.ts`) collects the staged writes and submits them in one call through
+the `Transaction` port (`repositories/transaction.ts`): `afterCommit` and `rollbackOnly`. Nothing in
+the port is DynamoDB-specific. Behind it, `DynamoTransaction` (`integrations/dynamo/transaction.ts`)
+collects the writes that the DynamoDB repositories stage, via `DynamoTransaction.of(tx)`, which rejects any
+other kind of transaction. It submits them in one call through
 `DynamoClient.writeAtomically()`, because that is what a DynamoDB transaction is. `commit()` exists
-only on `DynamoTransaction`, and only `useTransaction()` calls it, on the transaction it began.
+only on the `RootTransaction` that `beginTransaction()` returns, and only `useTransaction()` calls it.
 
 **Pros**
 
@@ -239,8 +254,8 @@ only on `DynamoTransaction`, and only `useTransaction()` calls it, on the transa
 - Strictness is checked by the compiler:
   - A write in a read-only use case fails with `Property 'tx' does not exist`.
   - A `Transactional<…>` body that is not wrapped cannot be called with the container.
-  - `features-without-storage` stops use cases importing `Write`, `tables/` or the DynamoDB client,
-    so they cannot stage raw ops.
+  - `features-use-ports` stops use cases importing anything from `integrations/`, so they cannot
+    stage raw ops.
 - Composition is atomic and type-checked. A transactional callee given a `ctx` that carries `tx` joins
   that transaction, and only the outermost one commits (`createProject` → `createTodo` ×N).
 - Rollback-only: if a joined callee throws and the caller swallows the error, the outer commit fails.
@@ -390,8 +405,8 @@ use case owns the boundary, and only the repository knows DynamoDB.
 
 ## Adding a use case or feature
 
-1. Entities and rules → `domain/`. Storage → `data/tables/` + `tables/index.ts`, a repository,
-   `dataModule`, and the table name in `config.ts`
+1. Entities and rules → `domain/`. The port → `repositories/`. Storage → `integrations/dynamo/tables/` +
+   `tables/index.ts`, the implementation, `dynamoModule`, and the table name in `config.ts`
 2. `features/<feature>/<useCase>.ts`, exported from the feature's `index.ts` (for apps only). Wrap it in
    `useTransaction()` if it writes
 3. Re-export from `src/index.ts`. Add the route in `apps/server/src/routes/`, run `pnpm generate`,

@@ -6,7 +6,7 @@ import {
   TransactWriteCommand,
   UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
-import type { CommonConfig } from '../config.ts';
+import type { CommonConfig } from '../../config.ts';
 import type { Write } from './write.ts';
 
 /** One client per process; shared by every repository through the container. */

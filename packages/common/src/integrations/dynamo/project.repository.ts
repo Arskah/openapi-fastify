@@ -1,20 +1,10 @@
 import { GetCommand } from '@aws-sdk/lib-dynamodb';
-import type { Project } from '../domain/project.ts';
-import { ConflictError, NotFoundError } from '../errors.ts';
+import type { Project } from '../../domain/project.ts';
+import { ConflictError, NotFoundError } from '../../errors.ts';
+import type { ProjectRepository } from '../../repositories/project.repository.ts';
 import type { RepositoryDeps } from './deps.ts';
 import { projectsTable } from './tables/projects.ts';
-import type { Transaction } from './transaction.ts';
-
-/** Reads run immediately; writes are staged in the given transaction. */
-export interface ProjectRepository {
-  /** `consistent` reads see writes committed just before. */
-  get(id: string, options?: { consistent?: boolean }): Promise<Project | undefined>;
-  create(tx: Transaction, project: Project): void;
-  /** Atomic append; NotFoundError on commit if the project does not exist. */
-  appendTodos(tx: Transaction, id: string, todoIds: readonly string[], updatedAt: string): void;
-  /** Removes `todoId` found at `index`; ConflictError on commit if the list changed meanwhile. */
-  removeTodoAt(tx: Transaction, id: string, index: number, todoId: string, updatedAt: string): void;
-}
+import { DynamoTransaction } from './transaction.ts';
 
 export function createProjectRepository({ config, logger, dynamo }: RepositoryDeps): ProjectRepository {
   const table = projectsTable(config);
@@ -31,7 +21,7 @@ export function createProjectRepository({ config, logger, dynamo }: RepositoryDe
 
     create(tx, project) {
       log.debug({ id: project.id }, 'stage insert project');
-      tx.stage({
+      DynamoTransaction.of(tx).stage({
         op: table.insert(project),
         item: table.item(project.id),
         onConditionFailed: () => new ConflictError(`Project '${project.id}' already exists`),
@@ -40,7 +30,7 @@ export function createProjectRepository({ config, logger, dynamo }: RepositoryDe
 
     appendTodos(tx, id, todoIds, updatedAt) {
       log.debug({ id, todoIds }, 'stage append todos to project');
-      tx.stage({
+      DynamoTransaction.of(tx).stage({
         op: table.appendTodos(id, todoIds, updatedAt),
         item: table.item(id),
         onConditionFailed: () => new NotFoundError('Project', id),
@@ -49,7 +39,7 @@ export function createProjectRepository({ config, logger, dynamo }: RepositoryDe
 
     removeTodoAt(tx, id, index, todoId, updatedAt) {
       log.debug({ id, index, todoId }, 'stage remove todo from project');
-      tx.stage({
+      DynamoTransaction.of(tx).stage({
         op: table.removeTodoAt(id, index, todoId, updatedAt),
         item: table.item(id),
         onConditionFailed: () => new ConflictError(`Project '${id}' changed concurrently; retry`),

@@ -1,6 +1,6 @@
 import type { CommonConfig } from './config.ts';
 import { createContextLogger } from './context.ts';
-import { dataModule, DynamoClient } from './data/index.ts';
+import { DynamoClient, dynamoModule } from './integrations/dynamo/index.ts';
 import type { Logger } from './logger.ts';
 
 /** Dependencies every module can rely on. */
@@ -27,7 +27,7 @@ export function extend<D extends object, P extends object>(deps: D, module: (dep
  * declare, as their first argument, and open transactions with `useTransaction()`.
  */
 export type Container<C extends CommonConfig = CommonConfig> = Core<C> &
-  ReturnType<typeof dataModule> & { dispose(): void };
+  ReturnType<typeof dynamoModule> & { dispose(): void };
 
 export interface ContainerOptions<C extends CommonConfig> {
   config: C;
@@ -45,7 +45,7 @@ export function createContainer<C extends CommonConfig>({
   // Logs go through the current request's logger when there is one (see context.ts)
   const core: Core<C> = { config, logger: createContextLogger(logger), dynamo };
   return {
-    ...extend(core, dataModule),
+    ...extend(core, dynamoModule),
     dispose: () => dynamo.destroy(),
   };
 }

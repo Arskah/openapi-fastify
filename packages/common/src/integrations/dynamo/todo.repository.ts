@@ -1,21 +1,10 @@
 import { BatchGetCommand, type BatchGetCommandOutput, GetCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
-import type { Todo } from '../domain/todo.ts';
-import { ConflictError, NotFoundError, ValidationError } from '../errors.ts';
+import type { Todo } from '../../domain/todo.ts';
+import { ConflictError, NotFoundError, ValidationError } from '../../errors.ts';
+import type { TodoRepository } from '../../repositories/todo.repository.ts';
 import type { RepositoryDeps } from './deps.ts';
 import { todosTable } from './tables/todos.ts';
-import type { Transaction } from './transaction.ts';
-
-/** Reads run immediately; writes are staged in the given transaction. */
-export interface TodoRepository {
-  get(id: string): Promise<Todo | undefined>;
-  /** Todos that exist among `ids`, in the order given. */
-  getMany(ids: readonly string[]): Promise<Todo[]>;
-  list(options: { limit: number; cursor?: string }): Promise<{ items: Todo[]; nextCursor?: string }>;
-  create(tx: Transaction, todo: Todo): void;
-  /** Saves `todo` if the stored one is unchanged since `expectedUpdatedAt`; else ConflictError on commit. */
-  replace(tx: Transaction, todo: Todo, expectedUpdatedAt: string): void;
-  delete(tx: Transaction, id: string): void;
-}
+import { DynamoTransaction } from './transaction.ts';
 
 export function createTodoRepository({ config, logger, dynamo }: RepositoryDeps): TodoRepository {
   const table = todosTable(config);
@@ -67,7 +56,7 @@ export function createTodoRepository({ config, logger, dynamo }: RepositoryDeps)
 
     create(tx, todo) {
       log.debug({ id: todo.id }, 'stage insert todo');
-      tx.stage({
+      DynamoTransaction.of(tx).stage({
         op: table.insert(todo),
         item: table.item(todo.id),
         onConditionFailed: () => new ConflictError(`Todo '${todo.id}' already exists`),
@@ -76,7 +65,7 @@ export function createTodoRepository({ config, logger, dynamo }: RepositoryDeps)
 
     replace(tx, todo, expectedUpdatedAt) {
       log.debug({ id: todo.id }, 'stage replace todo');
-      tx.stage({
+      DynamoTransaction.of(tx).stage({
         op: table.replace(todo, expectedUpdatedAt),
         item: table.item(todo.id),
         onConditionFailed: () => new ConflictError(`Todo '${todo.id}' was modified or deleted concurrently`),
@@ -85,7 +74,7 @@ export function createTodoRepository({ config, logger, dynamo }: RepositoryDeps)
 
     delete(tx, id) {
       log.debug({ id }, 'stage delete todo');
-      tx.stage({
+      DynamoTransaction.of(tx).stage({
         op: table.delete(id),
         item: table.item(id),
         onConditionFailed: () => new NotFoundError('Todo', id),

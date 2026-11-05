@@ -1,27 +1,23 @@
-import type { Logger } from '../logger.ts';
-import type { DynamoClient } from './dynamo.ts';
+import type { Logger } from '../../logger.ts';
+import type { DynamoClient } from './client.ts';
+import type { RootTransaction, Transaction } from '../../repositories/transaction.ts';
 import { MAX_WRITES, type Write } from './write.ts';
-
-/**
- * An open transaction, as seen by use cases and repositories. Repository write
- * methods take it as their first argument and stage into it; nothing is written
- * until its owner commits, so reads in the meantime do not see staged writes.
- */
-export interface Transaction {
-  /** For repositories: queues a write in this transaction. */
-  stage(write: Write): void;
-  /** Runs `fn` once this transaction has committed; skipped if it fails. */
-  afterCommit(fn: () => void): void;
-  /** Makes `commit()` fail with `cause`; for a joined part that failed. */
-  rollbackOnly(cause: unknown): void;
-}
 
 /**
  * A DynamoDB transaction. DynamoDB transactions are one batch call, so this is a
  * unit of work: it collects writes and submits them together on `commit()`.
  * Only whoever began it (`useTransaction()`) commits it.
  */
-export class DynamoTransaction implements Transaction {
+export class DynamoTransaction implements RootTransaction {
+  /**
+   * The DynamoDB transaction behind `tx`. DynamoDB repositories can only join a
+   * DynamoDB transaction; any other kind is a wiring error.
+   */
+  static of(tx: Transaction): DynamoTransaction {
+    if (tx instanceof DynamoTransaction) return tx;
+    throw new TypeError('DynamoDB repositories need a DynamoDB transaction; check the container wiring');
+  }
+
   readonly #dynamo: DynamoClient;
   readonly #log: Logger;
   readonly #writes: Write[] = [];
@@ -34,6 +30,7 @@ export class DynamoTransaction implements Transaction {
     this.#log = log;
   }
 
+  /** For repositories: queues a write in this transaction. */
   stage(write: Write): void {
     this.#assertOpen('Repository writes');
     if (this.#writes.some(({ item }) => item === write.item)) {
